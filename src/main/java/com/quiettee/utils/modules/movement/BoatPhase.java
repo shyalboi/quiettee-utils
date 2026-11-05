@@ -13,7 +13,6 @@ import meteordevelopment.meteorclient.gui.GuiTheme;
 import meteordevelopment.meteorclient.gui.widgets.WWidget;
 import meteordevelopment.meteorclient.gui.widgets.containers.WTable;
 import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
-import meteordevelopment.meteorclient.mixininterface.IPlayerInteractEntityC2SPacket;
 import meteordevelopment.meteorclient.renderer.Renderer2D;
 import meteordevelopment.meteorclient.renderer.text.TextRenderer;
 import meteordevelopment.meteorclient.settings.*;
@@ -1100,7 +1099,7 @@ public final class BoatPhase extends Module {
 
     @EventHandler
     private void onRender2D(Render2DEvent event) {
-        if (!speedometer.get() || boat == null || !owns(boat) || mc.options.hideGui) return;
+        if (!speedometer.get() || boat == null || !owns(boat)) return;
         long now = System.nanoTime();
         double echo = meter.echoBpt(now);
         String[] lines = {
@@ -1111,7 +1110,7 @@ public final class BoatPhase extends Module {
         };
         TextRenderer text = TextRenderer.get();
         if (text.isBuilding()) return;
-        ext.begin(event.graphics, meterScale.get());
+        text.begin(event.graphics, meterScale.get());
         double width = 0, lineHeight = text.getHeight() + 4;
         for (String line : lines) width = Math.max(width, text.getWidth(line, true));
         double x = Math.max(0, event.screenWidth-width-16) * meterX.get()/100.0;

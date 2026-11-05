@@ -13,7 +13,6 @@ import com.quiettee.utils.modules.movement.elytramotion.ElytraFollow;
 import com.quiettee.utils.modules.movement.elytramotion.ElytraOrbit;
 import com.quiettee.utils.modules.player.AirMiner;
 import com.quiettee.utils.modules.render.Flicker;
-import com.quiettee.utils.modules.render.HighContrast;
 import com.quiettee.utils.util.BlockBreaker;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.addons.GithubRepo;
@@ -47,7 +46,6 @@ public class QuietteeUtils extends MeteorAddon {
         modules.add(new ElytraDive());
         modules.add(new BoatPhase());
         modules.add(new Flicker());
-        modules.add(new HighContrast());
     }
 
     @Override

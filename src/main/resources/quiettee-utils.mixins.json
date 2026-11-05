@@ -10,8 +10,7 @@
     "LivingEntityAccessor",
     "PlayerEntityMixin",
     "PlayerInfoConcurrencyMixin",
-    "PlayerMoveC2SPacketAccessor",
-    "ShaderLoaderMixin"
+    "PlayerMoveC2SPacketAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

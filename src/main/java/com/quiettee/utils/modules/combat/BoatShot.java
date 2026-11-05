@@ -12,7 +12,6 @@ import meteordevelopment.meteorclient.gui.GuiTheme;
 import meteordevelopment.meteorclient.gui.widgets.WWidget;
 import meteordevelopment.meteorclient.gui.widgets.containers.WTable;
 import meteordevelopment.meteorclient.mixin.ProjectileInGroundAccessor;
-import meteordevelopment.meteorclient.mixininterface.IPlayerInteractEntityC2SPacket;
 import meteordevelopment.meteorclient.renderer.Renderer2D;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.renderer.text.TextRenderer;
@@ -490,14 +489,7 @@ public final class BoatShot extends Module {
         if (!mc.isSameThread() || !sameSession() || event.connection != connection || event.isCancelled()) return;
 
         if (!player.isPassenger() && event.packet instanceof ServerboundInteractPacket interaction) {
-            IPlayerInteractEntityC2SPacket access = (IPlayerInteractEntityC2SPacket) interaction;
-            boolean[] interact = { false };
-            interaction.dispatch(new ServerboundInteractPacket.Handler() {
-                @Override public void onInteraction(InteractionHand hand) { interact[0] = true; }
-                @Override public void onInteraction(InteractionHand hand, Vec3 position) { interact[0] = true; }
-                @Override public void onAttack() {}
-            });
-            if (interact[0] && access.meteor$getEntity() instanceof AbstractBoat target) {
+            if (mc.level.getEntity(interaction.entityId()) instanceof AbstractBoat target) {
                 mount.begin(target.getId(), tick);
                 primePacket = new ServerboundMovePlayerPacket.StatusOnly(false, player.horizontalCollision);
                 network.send(primePacket);
@@ -769,7 +761,7 @@ public final class BoatShot extends Module {
     }
 
     @EventHandler private void onRenderStatus(Render2DEvent event) {
-        if(!combatStatus.get() || !driving() || mc.options.hideGui)return;
+        if(!combatStatus.get() || !driving())return;
         TextRenderer text=TextRenderer.get();if(text.isBuilding())return;
         String label="BoatShot | "+status;
         text.begin(event.graphics, 1.2);
