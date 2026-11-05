@@ -9,8 +9,8 @@ import meteordevelopment.meteorclient.events.entity.player.PlayerMoveEvent;
 import meteordevelopment.meteorclient.events.entity.player.SendMovementPacketsEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
-import meteordevelopment.meteorclient.mixininterface.IPlayerMoveC2SPacket;
-import meteordevelopment.meteorclient.mixininterface.IVec3d;
+import meteordevelopment.meteorclient.mixininterface.IServerboundMovePlayerPacket;
+import meteordevelopment.meteorclient.mixininterface.IVec3;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -41,6 +41,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -94,7 +95,7 @@ public class MaceSmash extends Module {
         .name("entities")
         .description("What to smash.")
         .onlyAttackable()
-        .defaultValue(EntityType.PLAYER, EntityType.SLIME, EntityType.ZOMBIE, EntityType.SKELETON, EntityType.CREEPER, EntityType.SPIDER, EntityType.IRON_GOLEM)
+        .defaultValue(EntityTypes.PLAYER, EntityTypes.SLIME, EntityTypes.ZOMBIE, EntityTypes.SKELETON, EntityTypes.CREEPER, EntityTypes.SPIDER, EntityTypes.IRON_GOLEM)
         .build()
     );
 
@@ -990,7 +991,7 @@ public class MaceSmash extends Module {
         double vy = fVertical ? fVy : event.movement.y;
         int cx = (int) Math.floor((mc.player.getX() + vx) / 16), cz = (int) Math.floor((mc.player.getZ() + vz) / 16);
         if (!mc.level.getChunkSource().hasChunk(cx, cz)) { vx = 0; vz = 0; }
-        ((IVec3d) event.movement).meteor$set(vx, vy, vz);
+        ((IVec3) event.movement).meteor$set(vx, vy, vz);
     }
 
     private void cameraTick() {
@@ -1041,7 +1042,7 @@ public class MaceSmash extends Module {
 
     private void sendPosRaw(double y) {
         ServerboundMovePlayerPacket p = new ServerboundMovePlayerPacket.Pos(mc.player.getX(), y, mc.player.getZ(), false, mc.player.horizontalCollision);
-        ((IPlayerMoveC2SPacket) p).meteor$setTag(TAG);
+        ((IServerboundMovePlayerPacket) p).meteor$setTag(TAG);
         mc.getConnection().send(p);
     }
 
@@ -1086,7 +1087,7 @@ public class MaceSmash extends Module {
     private void rewriteOwnMove(PacketEvent.Send event) {
         if (correcting || !sameSession()) return;
         if (!(event.packet instanceof ServerboundMovePlayerPacket p) || !p.hasPosition()) return;
-        if (((IPlayerMoveC2SPacket) p).meteor$getTag() == TAG) return;
+        if (((IServerboundMovePlayerPacket) p).meteor$getTag() == TAG) return;
         posSentThisTick = true;
         if (!desynced()) return;
         ((PlayerMoveC2SPacketAccessor) p).quiettee$setY(p.getY(mc.player.getY()) + offset);
@@ -1179,7 +1180,7 @@ public class MaceSmash extends Module {
     @EventHandler(priority = EventPriority.HIGHEST)
     private void onReceiveFirst(PacketEvent.Receive event) {
 
-        if (event.packet instanceof ClientboundSetEntityMotionPacket p && sameSession() && p.getId() == mc.player.getId() && isLandedMarker(p.getMovement().y)) {
+        if (event.packet instanceof ClientboundSetEntityMotionPacket p && sameSession() && p.id() == mc.player.getId() && isLandedMarker(p.movement().y)) {
             observations.add(new ServerObservation(event.connection, mc.player, null, true));
         }
     }

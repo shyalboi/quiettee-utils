@@ -13,9 +13,9 @@ import meteordevelopment.meteorclient.events.entity.player.SendMovementPacketsEv
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
-import meteordevelopment.meteorclient.mixin.ClientPlayerEntityAccessor;
-import meteordevelopment.meteorclient.mixininterface.IPlayerMoveC2SPacket;
-import meteordevelopment.meteorclient.mixininterface.IVec3d;
+import meteordevelopment.meteorclient.mixin.LocalPlayerAccessor;
+import meteordevelopment.meteorclient.mixininterface.IServerboundMovePlayerPacket;
+import meteordevelopment.meteorclient.mixininterface.IVec3;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -825,7 +825,7 @@ public class Lance extends Module {
         if (selfWebHold) {
 
             mc.player.setDeltaMovement(Vec3.ZERO);
-            ((IVec3d) event.movement).meteor$set(0, 0, 0);
+            ((IVec3) event.movement).meteor$set(0, 0, 0);
             return;
         }
         if (srvGliding == Boolean.FALSE && mc.player.isFallFlying() && !glideRecovery) beginGlideRecovery();
@@ -873,7 +873,7 @@ public class Lance extends Module {
             double fraction = webSafeFraction(mc.player.getBoundingBox(), movement);
             movement = movement.scale(fraction);
         }
-        ((IVec3d) event.movement).meteor$set(movement.x, movement.y, movement.z);
+        ((IVec3) event.movement).meteor$set(movement.x, movement.y, movement.z);
     }
 
     private boolean usableElytra() {
@@ -931,7 +931,7 @@ public class Lance extends Module {
         if (FORK_SYNC || !ownsCurrentBody() || correcting || srvGliding != Boolean.FALSE || !mc.player.isFallFlying()) return;
         if (mc.player.onGround() || mc.player.isInWater() || !usableElytra()) return;
         relightArmed = true;
-        ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
+        ((LocalPlayerAccessor) mc.player).meteor$setPositionReminder(20);
     }
 
     private void relightPost() {
@@ -1011,7 +1011,7 @@ public class Lance extends Module {
         double lead = couchTiming.predictionTicks(PlayerUtils.getPing());
         AABB b = target.getBoundingBox().move(vPos.subtract(target.position())).move(vVel.scale(lead));
         double cx = (b.minX + b.maxX) * 0.5, cz = (b.minZ + b.maxZ) * 0.5, head = b.maxY;
-        AttackRange ar = weavingTier != null ? weavingRange : mc.player.entityAttackRange();
+        AttackRange ar = weavingTier != null ? weavingRange : mc.player.getAttackRangeWith(mc.player.getMainHandItem());
         double effMax = ar != null ? ar.effectiveMaxRange(mc.player) : 4.5;
         double effMin = ar != null ? ar.effectiveMinRange(mc.player) : 2.0;
 
@@ -1223,7 +1223,7 @@ public class Lance extends Module {
         double verticalDamage = laneDamage(vertical);
         double possibleDamage = potentialLaneDamage(vertical);
         if (crystalPolicy.get() == CrystalPolicy.EstimatedDamage && (verticalDamage > preferred || possibleDamage > preferred)) {
-            AttackRange range = weavingTier != null ? weavingRange : mc.player.entityAttackRange();
+            AttackRange range = weavingTier != null ? weavingRange : mc.player.getAttackRangeWith(mc.player.getMainHandItem());
             double outerGap = range != null ? range.effectiveMaxRange(mc.player) - 0.3 : strikeGap;
             if (outerGap > strikeGap + 0.05) {
                 candidates.add(LanceAttackMath.vertical(targetBox, outerGap, dip.get(), Math.max(restGap, outerGap + dip.get())));
@@ -1519,7 +1519,7 @@ public class Lance extends Module {
         Vec3 position = new Vec3(p.getX(mc.player.getX()), p.getY(mc.player.getY()), p.getZ(mc.player.getZ()));
         if (lastClaim != null && position.distanceToSqr(lastClaim) < 1e-6) lastClaimWireTick = tickCounter;
         else if (lastClaim != null) dbg("WIRE claim mismatch error=%.3f tag=%d intended=%s sent=%s", position.distanceTo(lastClaim),
-            ((IPlayerMoveC2SPacket) p).meteor$getTag(), lastClaim, position);
+            ((IServerboundMovePlayerPacket) p).meteor$getTag(), lastClaim, position);
         if (lastWire != null) {
             Vec3 delta = position.subtract(lastWire);
             wireTrace.addLast(String.format("t%d h%.2f v%+.2f g%b%s", tickCounter, Math.hypot(delta.x, delta.z), delta.y, p.isOnGround(), posSentThisTick ? " extra" : ""));
@@ -1546,7 +1546,7 @@ public class Lance extends Module {
         ServerboundMovePlayerPacket p = new ServerboundMovePlayerPacket.PosRot(mc.player.getX() + ox, mc.player.getY() + oy, mc.player.getZ() + oz,
             plannedAimTick == tickCounter ? plannedYaw : Rotations.serverYaw,
             plannedAimTick == tickCounter ? plannedPitch : Rotations.serverPitch, false, mc.player.horizontalCollision);
-        ((IPlayerMoveC2SPacket) p).meteor$setTag(TAG);
+        ((IServerboundMovePlayerPacket) p).meteor$setTag(TAG);
         mc.getConnection().send(p);
     }
 
@@ -1973,7 +1973,7 @@ public class Lance extends Module {
 
         if (!continuing) {
             weavingTier = heldTier();
-            weavingRange = mc.player.entityAttackRange();
+            weavingRange = mc.player.getAttackRangeWith(mc.player.getMainHandItem());
             weavingOriginalSlot = mc.player.getInventory().getSelectedSlot();
             weavingSlot = webSlot;
             weavingStartedAt = lastWebVolleyTick = tickCounter;

@@ -5,8 +5,8 @@ import com.quiettee.utils.mixin.PlayerMoveC2SPacketAccessor;
 import meteordevelopment.meteorclient.events.entity.player.PlayerMoveEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
-import meteordevelopment.meteorclient.mixin.ClientPlayerEntityAccessor;
-import meteordevelopment.meteorclient.mixininterface.IVec3d;
+import meteordevelopment.meteorclient.mixin.LocalPlayerAccessor;
+import meteordevelopment.meteorclient.mixininterface.IVec3;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
@@ -255,12 +255,12 @@ public class GliderWalk extends Module {
         if (pending > 0) pending--;
 
         if (!claiming()) return;
-        if (holdStill.get()) ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
+        if (holdStill.get()) ((LocalPlayerAccessor) mc.player).meteor$setPositionReminder(20);
         if (!engaged()) {
 
             if (showSelf.get() && mc.player.isFallFlying() && !mc.player.onGround() && !serverGliding && pending == 0) {
                 airRelight = true;
-                ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
+                ((LocalPlayerAccessor) mc.player).meteor$setPositionReminder(20);
             }
             return;
         }
@@ -279,7 +279,7 @@ public class GliderWalk extends Module {
             }
         }
 
-        if (holdStill.get()) ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
+        if (holdStill.get()) ((LocalPlayerAccessor) mc.player).meteor$setPositionReminder(20);
 
         showTicks++;
         if (spin.get()) spinYaw = Mth.wrapDegrees(spinYaw + spinSpeed.get().floatValue());
@@ -333,7 +333,7 @@ public class GliderWalk extends Module {
     @EventHandler(priority = EventPriority.LOWEST)
     private void onPlayerMove(PlayerMoveEvent event) {
         if (!groundFly.get() || event.type != MoverType.SELF || !engaged()) return;
-        if (mc.screen != null) return;
+        if (mc.gui.screen() != null) return;
 
         Vec3 fwd = Vec3.directionFromRotation(0, mc.player.getYRot());
         Vec3 rgt = Vec3.directionFromRotation(0, mc.player.getYRot() + 90);
@@ -348,7 +348,7 @@ public class GliderWalk extends Module {
         if (len < 1e-6) return;
 
         double speed = flySpeed.get();
-        ((IVec3d) event.movement).meteor$set(fx / len * speed, event.movement.y, fz / len * speed);
+        ((IVec3) event.movement).meteor$set(fx / len * speed, event.movement.y, fz / len * speed);
     }
 
     private void sendInput(boolean sneak) {

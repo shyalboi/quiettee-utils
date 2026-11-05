@@ -8,7 +8,7 @@ import com.quiettee.utils.modules.movement.elytramotion.ElytraOrbit;
 import meteordevelopment.meteorclient.events.entity.player.PlayerMoveEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
-import meteordevelopment.meteorclient.mixininterface.IVec3d;
+import meteordevelopment.meteorclient.mixininterface.IVec3;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.systems.modules.Modules;
@@ -419,11 +419,11 @@ public class FloatModule extends Module {
             }
         }
 
-        ((IVec3d) event.movement).meteor$set(vx, vy, vz);
+        ((IVec3) event.movement).meteor$set(vx, vy, vz);
     }
 
     private Vec3 creepVector() {
-        if (mc.player == null || mc.screen != null) return Vec3.ZERO;
+        if (mc.player == null || mc.gui.screen() != null) return Vec3.ZERO;
 
         double speed = probe.get() ? activeCreep : creepSpeed.get();
 

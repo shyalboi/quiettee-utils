@@ -17,6 +17,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ArrowItem;
@@ -151,7 +152,7 @@ public class Fusillade extends Module {
         .name("entities")
         .description("What to aim at.")
         .onlyAttackable()
-        .defaultValue(EntityType.PLAYER)
+        .defaultValue(EntityTypes.PLAYER)
         .visible(() -> aim.get() != Aim.Off)
         .build()
     );
@@ -212,7 +213,7 @@ public class Fusillade extends Module {
             return;
         }
 
-        if (mc.screen != null) {
+        if (mc.gui.screen() != null) {
             if (phase != Phase.IDLE) stopCharging();
             return;
         }
@@ -480,7 +481,7 @@ public class Fusillade extends Module {
 
     private static int boltCount(ItemStack crossbow) {
         ChargedProjectiles c = crossbow.get(DataComponents.CHARGED_PROJECTILES);
-        return c == null ? 0 : c.getItems().size();
+        return c == null ? 0 : c.items().size();
     }
 
     @Override

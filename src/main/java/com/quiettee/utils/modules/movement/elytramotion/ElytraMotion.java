@@ -3,8 +3,8 @@ package com.quiettee.utils.modules.movement.elytramotion;
 import com.quiettee.utils.QuietteeUtils;
 import meteordevelopment.meteorclient.events.entity.player.PlayerMoveEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
-import meteordevelopment.meteorclient.mixininterface.IRaycastContext;
-import meteordevelopment.meteorclient.mixininterface.IVec3d;
+import meteordevelopment.meteorclient.mixininterface.IClipContext;
+import meteordevelopment.meteorclient.mixininterface.IVec3;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
@@ -151,7 +151,7 @@ public abstract class ElytraMotion extends Module {
             }
         }
 
-        ((IVec3d) event.movement).meteor$set(vx, vy, vz);
+        ((IVec3) event.movement).meteor$set(vx, vy, vz);
     }
 
     private void handleTakeoff() {
@@ -169,13 +169,13 @@ public abstract class ElytraMotion extends Module {
     }
 
     protected void setDesired(double vx, double vy, double vz) {
-        ((IVec3d) desired).meteor$set(vx, vy, vz);
+        ((IVec3) desired).meteor$set(vx, vy, vz);
         hasDesired = true;
         additive = false;
     }
 
     protected void addDesired(double vx, double vy, double vz) {
-        ((IVec3d) desired).meteor$set(vx, vy, vz);
+        ((IVec3) desired).meteor$set(vx, vy, vz);
         hasDesired = true;
         additive = true;
     }
@@ -205,10 +205,10 @@ public abstract class ElytraMotion extends Module {
     }
 
     protected boolean blocked(double fromX, double fromY, double fromZ, double toX, double toY, double toZ) {
-        ((IVec3d) rayFrom).meteor$set(fromX, fromY, fromZ);
-        ((IVec3d) rayTo).meteor$set(toX, toY, toZ);
+        ((IVec3) rayFrom).meteor$set(fromX, fromY, fromZ);
+        ((IVec3) rayTo).meteor$set(toX, toY, toZ);
         ClipContext context = raycastContext();
-        ((IRaycastContext) context).meteor$set(rayFrom, rayTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
+        ((IClipContext) context).meteor$set(rayFrom, rayTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
         return mc.level.clip(context).getType() == HitResult.Type.BLOCK;
     }
 
@@ -233,10 +233,10 @@ public abstract class ElytraMotion extends Module {
     }
 
     protected double heightAboveGround(double maxDepth) {
-        ((IVec3d) rayFrom).meteor$set(mc.player.getX(), mc.player.getY(), mc.player.getZ());
-        ((IVec3d) rayTo).meteor$set(mc.player.getX(), mc.player.getY() - maxDepth, mc.player.getZ());
+        ((IVec3) rayFrom).meteor$set(mc.player.getX(), mc.player.getY(), mc.player.getZ());
+        ((IVec3) rayTo).meteor$set(mc.player.getX(), mc.player.getY() - maxDepth, mc.player.getZ());
         ClipContext context = raycastContext();
-        ((IRaycastContext) context).meteor$set(rayFrom, rayTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
+        ((IClipContext) context).meteor$set(rayFrom, rayTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
         var hit = mc.level.clip(context);
         if (hit.getType() != HitResult.Type.BLOCK) return maxDepth;
         return mc.player.getY() - hit.getLocation().y;

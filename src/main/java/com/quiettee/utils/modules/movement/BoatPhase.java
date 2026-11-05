@@ -276,7 +276,7 @@ public final class BoatPhase extends Module {
     }
 
     public boolean phases(AbstractBoat candidate) {
-        return owns(candidate) && phase.get() && plannedThroughBlocks && !correcting && motion.holdTicks() == 0 && mc.screen == null;
+        return owns(candidate) && phase.get() && plannedThroughBlocks && !correcting && motion.holdTicks() == 0 && mc.gui.screen() == null;
     }
 
     public Vec3 movement(AbstractBoat candidate, Vec3 vanilla) {
@@ -286,7 +286,7 @@ public final class BoatPhase extends Module {
         plannedShotMovement = false;
         plannedMode = travelMode();
         if (lockYaw.get()) candidate.setYRot(mc.player.getYRot());
-        if (correcting || motion.holdTicks() > 0 || mc.screen != null && !inventoryFollow) {
+        if (correcting || motion.holdTicks() > 0 || mc.gui.screen() != null && !inventoryFollow) {
             candidate.setDeltaMovement(Vec3.ZERO);
             return Vec3.ZERO;
         }
@@ -418,13 +418,13 @@ public final class BoatPhase extends Module {
     }
 
     public boolean shotReady(AbstractBoat candidate) {
-        return isActive() && owns(candidate) && !correcting && motion.holdTicks() == 0 && mc.screen == null;
+        return isActive() && owns(candidate) && !correcting && motion.holdTicks() == 0 && mc.gui.screen() == null;
     }
 
     private boolean travelReady(AbstractBoat candidate) {
         BoatShot shot=BoatShot.active();
         return isActive() && owns(candidate) && !correcting && motion.holdTicks()==0
-            && (mc.screen==null || shot!=null && shot.inventoryFollowAllowed());
+            && (mc.gui.screen()==null || shot!=null && shot.inventoryFollowAllowed());
     }
 
     public double shotVerticalLimit() { return Math.min(9, travelVerticalSpeed()); }
@@ -812,13 +812,7 @@ public final class BoatPhase extends Module {
             && !mc.player.isPassenger() && event.packet instanceof ServerboundInteractPacket interaction
             && lastBoardInteraction != interaction) {
             lastBoardInteraction = interaction;
-            boolean[] use = {false};
-            interaction.dispatch(new ServerboundInteractPacket.Handler() {
-                @Override public void onInteraction(InteractionHand hand) { use[0] = true; }
-                @Override public void onInteraction(InteractionHand hand, Vec3 position) { use[0] = true; }
-                @Override public void onAttack() {}
-            });
-            if (use[0] && ((IPlayerInteractEntityC2SPacket)interaction).meteor$getEntity() instanceof AbstractBoat candidate) {
+            if (mc.level.getEntity(interaction.entityId()) instanceof AbstractBoat candidate) {
 
                 boolean grounded = supported(candidate, .35);
                 boolean armed = remount.intent(candidate.getId(), mc.player.tickCount, grounded || remountRetry.get(), true,
@@ -1117,7 +1111,7 @@ public final class BoatPhase extends Module {
         };
         TextRenderer text = TextRenderer.get();
         if (text.isBuilding()) return;
-        text.begin(meterScale.get());
+        ext.begin(event.graphics, meterScale.get());
         double width = 0, lineHeight = text.getHeight() + 4;
         for (String line : lines) width = Math.max(width, text.getWidth(line, true));
         double x = Math.max(0, event.screenWidth-width-16) * meterX.get()/100.0;
