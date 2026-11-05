@@ -8,8 +8,8 @@ import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 
 public class AirMiner extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -73,12 +73,12 @@ public class AirMiner extends Module {
     }
 
     private boolean canClaim() {
-        if (mc.player == null || mc.getNetworkHandler() == null) return false;
-        if (mc.player.isOnGround()) return false;
-        if (mc.player.isGliding() && !whileGliding.get()) return false;
+        if (mc.player == null || mc.getConnection() == null) return false;
+        if (mc.player.onGround()) return false;
+        if (mc.player.isFallFlying() && !whileGliding.get()) return false;
         if (mc.player.isCreative() || mc.player.isSpectator()) return false;
 
-        double speed = mc.player.getVelocity().horizontalLength();
+        double speed = mc.player.getDeltaMovement().horizontalDistance();
         return speed <= maxSpeed.get();
     }
 
@@ -93,16 +93,16 @@ public class AirMiner extends Module {
     private void onSend(PacketEvent.Send event) {
         if (mc.player == null || injecting) return;
 
-        if (event.packet instanceof PlayerActionC2SPacket p) {
-            PlayerActionC2SPacket.Action a = p.getAction();
-            if ((a == PlayerActionC2SPacket.Action.START_DESTROY_BLOCK || a == PlayerActionC2SPacket.Action.STOP_DESTROY_BLOCK)
+        if (event.packet instanceof ServerboundPlayerActionPacket p) {
+            ServerboundPlayerActionPacket.Action a = p.getAction();
+            if ((a == ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK || a == ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK)
                 && canClaim()) {
                 claim();
             }
             return;
         }
 
-        if (event.packet instanceof PlayerMoveC2SPacket move && claimLeft > 0 && move.changesPosition()) {
+        if (event.packet instanceof ServerboundMovePlayerPacket move && claimLeft > 0 && move.hasPosition()) {
             ((PlayerMoveC2SPacketAccessor) move).quiettee$setOnGround(true);
         }
     }
@@ -110,9 +110,9 @@ public class AirMiner extends Module {
     private void claim() {
         injecting = true;
         try {
-            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
+            mc.getConnection().send(new ServerboundMovePlayerPacket.PosRot(
                 mc.player.getX(), mc.player.getY(), mc.player.getZ(),
-                mc.player.getYaw(), mc.player.getPitch(), true, mc.player.horizontalCollision));
+                mc.player.getYRot(), mc.player.getXRot(), true, mc.player.horizontalCollision));
         }
         finally {
             injecting = false;
@@ -126,13 +126,13 @@ public class AirMiner extends Module {
 
     private void restore() {
         lying = false;
-        if (mc.player == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.getConnection() == null) return;
 
         injecting = true;
         try {
-            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
+            mc.getConnection().send(new ServerboundMovePlayerPacket.PosRot(
                 mc.player.getX(), mc.player.getY(), mc.player.getZ(),
-                mc.player.getYaw(), mc.player.getPitch(), mc.player.isOnGround(), mc.player.horizontalCollision));
+                mc.player.getYRot(), mc.player.getXRot(), mc.player.onGround(), mc.player.horizontalCollision));
         }
         finally {
             injecting = false;

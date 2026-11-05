@@ -12,14 +12,14 @@ import meteordevelopment.meteorclient.utils.entity.TargetUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.client.network.AbstractClientPlayerEntity;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 
 public abstract class ElytraMotion extends Module {
     protected final SettingGroup sgEnvelope = settings.createGroup("Speed Envelope");
@@ -56,7 +56,7 @@ public abstract class ElytraMotion extends Module {
         .build()
     );
 
-    protected final Vec3d desired = new Vec3d(0, 0, 0);
+    protected final Vec3 desired = new Vec3(0, 0, 0);
     protected boolean hasDesired;
     protected boolean additive;
 
@@ -64,9 +64,9 @@ public abstract class ElytraMotion extends Module {
 
     protected double maxDownOverride = -1;
 
-    private RaycastContext raycastContext;
-    private final Vec3d rayFrom = new Vec3d(0, 0, 0);
-    private final Vec3d rayTo = new Vec3d(0, 0, 0);
+    private ClipContext raycastContext;
+    private final Vec3 rayFrom = new Vec3(0, 0, 0);
+    private final Vec3 rayTo = new Vec3(0, 0, 0);
     private int takeoffTimer;
 
     public ElytraMotion(String name, String description) {
@@ -82,9 +82,9 @@ public abstract class ElytraMotion extends Module {
         onStart();
     }
 
-    private RaycastContext raycastContext() {
+    private ClipContext raycastContext() {
         if (raycastContext == null) {
-            raycastContext = new RaycastContext(new Vec3d(0, 0, 0), new Vec3d(0, 0, 0), RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, mc.player);
+            raycastContext = new ClipContext(new Vec3(0, 0, 0), new Vec3(0, 0, 0), ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
         }
         return raycastContext;
     }
@@ -107,12 +107,12 @@ public abstract class ElytraMotion extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        if (mc.player == null || mc.world == null) return;
+        if (mc.player == null || mc.level == null) return;
 
         hasDesired = false;
         additive = false;
 
-        if (!mc.player.isGliding()) {
+        if (!mc.player.isFallFlying()) {
             if (autoTakeoff.get()) handleTakeoff();
         }
 
@@ -121,7 +121,7 @@ public abstract class ElytraMotion extends Module {
 
     @EventHandler(priority = EventPriority.LOWEST)
     private void onPlayerMove(PlayerMoveEvent event) {
-        if (!hasDesired || !mc.player.isGliding()) return;
+        if (!hasDesired || !mc.player.isFallFlying()) return;
         if (priorityOwner != null && priorityOwner != this && priorityOwner.isActive()) return;
 
         double vx = desired.x, vy = desired.y, vz = desired.z;
@@ -145,7 +145,7 @@ public abstract class ElytraMotion extends Module {
         if (chunkGuard.get()) {
             int chunkX = (int) Math.floor((mc.player.getX() + vx) / 16);
             int chunkZ = (int) Math.floor((mc.player.getZ() + vz) / 16);
-            if (!mc.world.getChunkManager().isChunkLoaded(chunkX, chunkZ)) {
+            if (!mc.level.getChunkSource().hasChunk(chunkX, chunkZ)) {
                 vx = 0;
                 vz = 0;
             }
@@ -155,16 +155,16 @@ public abstract class ElytraMotion extends Module {
     }
 
     private void handleTakeoff() {
-        if (mc.player.getEquippedStack(EquipmentSlot.CHEST).getItem() != Items.ELYTRA) return;
+        if (mc.player.getItemBySlot(EquipmentSlot.CHEST).getItem() != Items.ELYTRA) return;
 
-        if (mc.player.isOnGround()) {
+        if (mc.player.onGround()) {
             if (takeoffTimer++ % 10 == 0) {
                 mc.player.setSprinting(true);
-                mc.player.jump();
+                mc.player.jumpFromGround();
             }
-        } else if (mc.player.getVelocity().y < 0) {
+        } else if (mc.player.getDeltaMovement().y < 0) {
 
-            mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+            mc.getConnection().send(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
         }
     }
 
@@ -207,14 +207,14 @@ public abstract class ElytraMotion extends Module {
     protected boolean blocked(double fromX, double fromY, double fromZ, double toX, double toY, double toZ) {
         ((IVec3d) rayFrom).meteor$set(fromX, fromY, fromZ);
         ((IVec3d) rayTo).meteor$set(toX, toY, toZ);
-        RaycastContext context = raycastContext();
-        ((IRaycastContext) context).meteor$set(rayFrom, rayTo, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, mc.player);
-        return mc.world.raycast(context).getType() == HitResult.Type.BLOCK;
+        ClipContext context = raycastContext();
+        ((IRaycastContext) context).meteor$set(rayFrom, rayTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
+        return mc.level.clip(context).getType() == HitResult.Type.BLOCK;
     }
 
     protected boolean spaceFree(double x, double y, double z) {
-        net.minecraft.util.math.Box box = mc.player.getBoundingBox().offset(x - mc.player.getX(), y - mc.player.getY(), z - mc.player.getZ());
-        return mc.world.isSpaceEmpty(mc.player, box);
+        net.minecraft.world.phys.AABB box = mc.player.getBoundingBox().move(x - mc.player.getX(), y - mc.player.getY(), z - mc.player.getZ());
+        return mc.level.noCollision(mc.player, box);
     }
 
     protected boolean pathClear(double fromX, double fromY, double fromZ, double toX, double toY, double toZ) {
@@ -235,20 +235,20 @@ public abstract class ElytraMotion extends Module {
     protected double heightAboveGround(double maxDepth) {
         ((IVec3d) rayFrom).meteor$set(mc.player.getX(), mc.player.getY(), mc.player.getZ());
         ((IVec3d) rayTo).meteor$set(mc.player.getX(), mc.player.getY() - maxDepth, mc.player.getZ());
-        RaycastContext context = raycastContext();
-        ((IRaycastContext) context).meteor$set(rayFrom, rayTo, RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, mc.player);
-        var hit = mc.world.raycast(context);
+        ClipContext context = raycastContext();
+        ((IRaycastContext) context).meteor$set(rayFrom, rayTo, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
+        var hit = mc.level.clip(context);
         if (hit.getType() != HitResult.Type.BLOCK) return maxDepth;
-        return mc.player.getY() - hit.getPos().y;
+        return mc.player.getY() - hit.getLocation().y;
     }
 
     protected void lookAt(double x, double y, double z) {
-        Rotations.rotate(Rotations.getYaw(new Vec3d(x, y, z)), Rotations.getPitch(new Vec3d(x, y, z)));
+        Rotations.rotate(Rotations.getYaw(new Vec3(x, y, z)), Rotations.getPitch(new Vec3(x, y, z)));
     }
 
-    protected PlayerEntity findTarget(String name, double range, SortPriority priority) {
+    protected Player findTarget(String name, double range, SortPriority priority) {
         if (name != null && !name.isBlank()) {
-            for (AbstractClientPlayerEntity player : mc.world.getPlayers()) {
+            for (AbstractClientPlayer player : mc.level.players()) {
                 if (player == mc.player) continue;
                 if (player.getGameProfile().name().equalsIgnoreCase(name.trim())) {
                     return player.isAlive() && mc.player.distanceTo(player) <= range ? player : null;
@@ -257,11 +257,11 @@ public abstract class ElytraMotion extends Module {
             return null;
         }
 
-        PlayerEntity target = TargetUtils.getPlayerTarget(range, priority);
+        Player target = TargetUtils.getPlayerTarget(range, priority);
         return TargetUtils.isBadTarget(target, range) ? null : target;
     }
 
-    protected boolean validTarget(PlayerEntity target, double range) {
+    protected boolean validTarget(Player target, double range) {
         return target != null && target.isAlive() && !target.isRemoved() && mc.player.distanceTo(target) <= range;
     }
 }

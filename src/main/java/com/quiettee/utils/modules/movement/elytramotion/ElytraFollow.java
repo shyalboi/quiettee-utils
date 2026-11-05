@@ -3,8 +3,8 @@ package com.quiettee.utils.modules.movement.elytramotion;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.Vec3;
 
 public class ElytraFollow extends ElytraMotion {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -90,7 +90,7 @@ public class ElytraFollow extends ElytraMotion {
         .build()
     );
 
-    private PlayerEntity target;
+    private Player target;
     private int lostTicks;
 
     public ElytraFollow() {
@@ -117,9 +117,9 @@ public class ElytraFollow extends ElytraMotion {
         }
         lostTicks = 0;
 
-        double vx = target.getX() - target.lastX;
-        double vy = target.getY() - target.lastY;
-        double vz = target.getZ() - target.lastZ;
+        double vx = target.getX() - target.xo;
+        double vy = target.getY() - target.yo;
+        double vz = target.getZ() - target.zo;
         double lead = leadTicks.get();
 
         double ax = target.getX() + vx * lead;
@@ -127,13 +127,13 @@ public class ElytraFollow extends ElytraMotion {
         double az = target.getZ() + vz * lead;
 
         if (slot.get() != Slot.Shadow) {
-            Vec3d look = Vec3d.fromPolar(0, target.getYaw());
+            Vec3 look = Vec3.directionFromRotation(0, target.getYRot());
             double d = distance.get();
             if (slot.get() == Slot.Behind) {
                 ax -= look.x * d;
                 az -= look.z * d;
             } else if (slot.get() == Slot.Beside) {
-                Vec3d right = Vec3d.fromPolar(0, target.getYaw() + 90);
+                Vec3 right = Vec3.directionFromRotation(0, target.getYRot() + 90);
                 ax += right.x * d;
                 az += right.z * d;
             }

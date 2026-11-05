@@ -1,14 +1,14 @@
 package com.quiettee.utils.modules.combat;
 
-import net.minecraft.network.packet.Packet;
-import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
-import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
-import net.minecraft.util.Hand;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
+import net.minecraft.world.InteractionHand;
 
 public final class BoatShotPackets {
     public static boolean preserveQueuedRelease(Packet<?> packet,boolean automatic,boolean sameBow,int slot) {
         if(!sameBow)return false;
-        return automatic && packet instanceof PlayerInteractItemC2SPacket use && use.getHand()==Hand.MAIN_HAND
-            || packet instanceof UpdateSelectedSlotC2SPacket sync && sync.getSelectedSlot()==slot;
+        return automatic && packet instanceof ServerboundUseItemPacket use && use.getHand()==InteractionHand.MAIN_HAND
+            || packet instanceof ServerboundSetCarriedItemPacket sync && sync.getSlot()==slot;
     }
 }

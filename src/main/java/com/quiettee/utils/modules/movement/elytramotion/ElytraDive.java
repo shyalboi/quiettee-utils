@@ -3,7 +3,7 @@ package com.quiettee.utils.modules.movement.elytramotion;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.entity.SortPriority;
-import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.world.entity.player.Player;
 
 public class ElytraDive extends ElytraMotion {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -97,7 +97,7 @@ public class ElytraDive extends ElytraMotion {
         .build()
     );
 
-    private PlayerEntity target;
+    private Player target;
     private Phase phase;
     private int pauseTicks;
 

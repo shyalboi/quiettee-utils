@@ -24,29 +24,28 @@ import meteordevelopment.meteorclient.utils.misc.input.Input;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityPosition;
-import net.minecraft.entity.vehicle.AbstractBoatEntity;
-import net.minecraft.network.ClientConnection;
-import net.minecraft.network.packet.Packet;
-import net.minecraft.network.packet.c2s.play.PlayerInputC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerInteractEntityC2SPacket;
-import net.minecraft.network.packet.c2s.play.VehicleMoveC2SPacket;
-import net.minecraft.network.packet.s2c.play.EntityPassengersSetS2CPacket;
-import net.minecraft.network.packet.s2c.play.EntityPositionS2CPacket;
-import net.minecraft.network.packet.s2c.play.EntityPositionSyncS2CPacket;
-import net.minecraft.network.packet.s2c.play.EntityS2CPacket;
-import net.minecraft.network.packet.s2c.play.VehicleMoveS2CPacket;
-import net.minecraft.registry.tag.FluidTags;
-import net.minecraft.util.Hand;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket;
+import net.minecraft.network.protocol.game.ClientboundMoveEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundMoveVehiclePacket;
+import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
+import net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket;
+import net.minecraft.network.protocol.game.ServerboundInteractPacket;
+import net.minecraft.network.protocol.game.ServerboundMoveVehiclePacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.PositionMoveRotation;
+import net.minecraft.world.entity.vehicle.boat.AbstractBoat;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
@@ -180,10 +179,10 @@ public final class BoatPhase extends Module {
     private final BoatPhaseMeter meter = new BoatPhaseMeter();
     private final BoatPhaseRemount remount = new BoatPhaseRemount();
     private BoatPhaseTravel.Mode plannedMode = BoatPhaseTravel.Mode.LIMITED;
-    private ClientConnection travelConnection;
-    private ClientWorld travelWorld;
-    private ClientWorld hashWorld;
-    private ClientConnection hashConnection;
+    private Connection travelConnection;
+    private ClientLevel travelWorld;
+    private ClientLevel hashWorld;
+    private Connection hashConnection;
     private Integer correctionHash;
     private int plannedHashTick = -1;
     private Object lastPlayerCorrection, lastVehicleCorrection, lastInputPacket, lastObservationPacket;
@@ -195,16 +194,16 @@ public final class BoatPhase extends Module {
     private final ConcurrentLinkedQueue<Observation> observations = new ConcurrentLinkedQueue<>();
     private final AtomicInteger observationCount = new AtomicInteger();
     private volatile long epoch;
-    private volatile ClientConnection connection;
-    private ClientPlayerEntity player;
-    private ClientWorld world;
-    private ClientPlayNetworkHandler network;
-    private AbstractBoatEntity boat;
+    private volatile Connection connection;
+    private LocalPlayer player;
+    private ClientLevel world;
+    private ClientPacketListener network;
+    private AbstractBoat boat;
     private boolean driver;
     private boolean correcting;
     private boolean hadGuest;
-    private Vec3d lastWire;
-    private Vec3d plannedFrom;
+    private Vec3 lastWire;
+    private Vec3 plannedFrom;
     private int plannedTick = -1;
     private int sentCount;
     private int corrections;
@@ -223,14 +222,14 @@ public final class BoatPhase extends Module {
     private boolean cruising;
     private float cruiseYaw;
     private double entryHeight;
-    private Vec3d lastStep = Vec3d.ZERO;
-    private VehicleMoveC2SPacket substepPacket;
+    private Vec3 lastStep = Vec3.ZERO;
+    private ServerboundMoveVehiclePacket substepPacket;
     private boolean splitting;
-    private Vec3d substepOrigin;
+    private Vec3 substepOrigin;
     private String status = "board a boat";
     private PrintWriter log;
 
-    private record Observation(long epoch, ClientConnection connection, Packet<?> packet) {}
+    private record Observation(long epoch, Connection connection, Packet<?> packet) {}
 
     public BoatPhase() {
         super(QuietteeUtils.CATEGORY, "boat-phase", "Fly a boat through blocks. WASD, jump and sprint.", "ferryman");
@@ -268,31 +267,31 @@ public final class BoatPhase extends Module {
     }
 
     private boolean sameSession() {
-        return player == mc.player && world == mc.world && network == mc.getNetworkHandler();
+        return player == mc.player && world == mc.level && network == mc.getConnection();
     }
 
-    private boolean owns(AbstractBoatEntity candidate) {
+    private boolean owns(AbstractBoat candidate) {
         return boat == candidate && driver && sameSession() && mc.player != null && mc.player.isAlive()
             && !candidate.isRemoved() && mc.player.getRootVehicle() == candidate && candidate.getControllingPassenger() == mc.player;
     }
 
-    public boolean phases(AbstractBoatEntity candidate) {
-        return owns(candidate) && phase.get() && plannedThroughBlocks && !correcting && motion.holdTicks() == 0 && mc.currentScreen == null;
+    public boolean phases(AbstractBoat candidate) {
+        return owns(candidate) && phase.get() && plannedThroughBlocks && !correcting && motion.holdTicks() == 0 && mc.screen == null;
     }
 
-    public Vec3d movement(AbstractBoatEntity candidate, Vec3d vanilla) {
+    public Vec3 movement(AbstractBoat candidate, Vec3 vanilla) {
         if (!owns(candidate)) return vanilla;
         BoatShot shot = BoatShot.active();
         boolean inventoryFollow=shot!=null && shot.inventoryFollowAllowed();
         plannedShotMovement = false;
         plannedMode = travelMode();
-        if (lockYaw.get()) candidate.setYaw(mc.player.getYaw());
-        if (correcting || motion.holdTicks() > 0 || mc.currentScreen != null && !inventoryFollow) {
-            candidate.setVelocity(Vec3d.ZERO);
-            return Vec3d.ZERO;
+        if (lockYaw.get()) candidate.setYRot(mc.player.getYRot());
+        if (correcting || motion.holdTicks() > 0 || mc.screen != null && !inventoryFollow) {
+            candidate.setDeltaMovement(Vec3.ZERO);
+            return Vec3.ZERO;
         }
-        Vec3d from = candidate.getEntityPos();
-        Vec3d shotStep = shot == null ? null : shot.movement(candidate);
+        Vec3 from = candidate.position();
+        Vec3 shotStep = shot == null ? null : shot.movement(candidate);
         if (shotStep != null) {
             plannedShotMovement = shot.singleUpdateMovement();
             cruising = false;
@@ -303,82 +302,82 @@ public final class BoatPhase extends Module {
             status = "boat shot";
             plannedClear = clearTravel(candidate, shotStep);
             shotStep = hashStep(candidate, shotStep);
-            candidate.setVelocity(shotStep);
+            candidate.setDeltaMovement(shotStep);
             return shotStep;
         }
-        double forward = (Input.isPressed(mc.options.forwardKey) ? 1 : 0) - (Input.isPressed(mc.options.backKey) ? 1 : 0);
-        double sideways = (Input.isPressed(mc.options.leftKey) ? 1 : 0) - (Input.isPressed(mc.options.rightKey) ? 1 : 0);
+        double forward = (Input.isPressed(mc.options.keyUp) ? 1 : 0) - (Input.isPressed(mc.options.keyDown) ? 1 : 0);
+        double sideways = (Input.isPressed(mc.options.keyLeft) ? 1 : 0) - (Input.isPressed(mc.options.keyRight) ? 1 : 0);
         if (forward != 0 || sideways != 0) cruising = false;
-        float yaw = mc.player.getYaw();
+        float yaw = mc.player.getYRot();
         if (cruising) { forward = 1; yaw = cruiseYaw; }
-        boolean up = Input.isPressed(mc.options.jumpKey), down = Input.isPressed(mc.options.sprintKey);
-        double floor = world.getBottomY() + 2;
-        double topOffset = candidate.streamSelfAndPassengers().mapToDouble(e -> e.getBoundingBox().maxY - candidate.getY()).max().orElse(candidate.getHeight());
-        double ceiling = world.getTopYInclusive() - topOffset;
+        boolean up = Input.isPressed(mc.options.keyJump), down = Input.isPressed(mc.options.keySprint);
+        double floor = world.getMinY() + 2;
+        double topOffset = candidate.getSelfAndPassengers().mapToDouble(e -> e.getBoundingBox().maxY - candidate.getY()).max().orElse(candidate.getBbHeight());
+        double ceiling = world.getMaxY() - topOffset;
         double airLimit = travelSpeed();
         double airSpeed = airLimit;
         double solidSpeed = Math.min(phaseSpeed.get(), horizontalLimit.get());
         boolean adaptive = phase.get() && adaptivePhase.get() && !adaptiveBlocked;
         BoatPhaseMotion.Point step = motion.plan(point(from), forward, sideways, up, down, yaw,
             adaptive ? Math.max(airSpeed, solidSpeed) : airSpeed, travelVerticalSpeed(), floor, ceiling, false);
-        Vec3d delta = new Vec3d(step.x(), step.y(), step.z());
-        Vec3d followStep = shot == null ? null : shot.followMovement(candidate, airLimit, Math.min(9, travelVerticalSpeed()));
-        if(inventoryFollow && followStep==null) { candidate.setVelocity(Vec3d.ZERO);return Vec3d.ZERO; }
+        Vec3 delta = new Vec3(step.x(), step.y(), step.z());
+        Vec3 followStep = shot == null ? null : shot.followMovement(candidate, airLimit, Math.min(9, travelVerticalSpeed()));
+        if(inventoryFollow && followStep==null) { candidate.setDeltaMovement(Vec3.ZERO);return Vec3.ZERO; }
         if (followStep != null) {
             cruising = false;
             motion.cancelTravel();
 
             delta = followStep;
-            if (delta.lengthSquared() < 1e-10 && antiKick.get() && !supported(candidate)
-                && motion.tick() % 10 < 2 && clearTravel(candidate, new Vec3d(0, -.08, 0))) delta = new Vec3d(0, -.08, 0);
+            if (delta.lengthSqr() < 1e-10 && antiKick.get() && !supported(candidate)
+                && motion.tick() % 10 < 2 && clearTravel(candidate, new Vec3(0, -.08, 0))) delta = new Vec3(0, -.08, 0);
             plannedThroughBlocks = false;
             plannedFrom = from;
             plannedTick = motion.tick();
-            if (!shot.safeTravel(candidate, delta)) delta = Vec3d.ZERO;
+            if (!shot.safeTravel(candidate, delta)) delta = Vec3.ZERO;
             plannedClear = clearTravel(candidate, delta);
             delta = hashStep(candidate, delta);
-            candidate.setVelocity(delta);
+            candidate.setDeltaMovement(delta);
             status = speedFallback() ? "following (speed fallback)" : "following";
             return delta;
         }
-        boolean throughBlocks = phase.get() && !world.isSpaceEmpty(candidate, candidate.getBoundingBox().stretch(delta).contract(1e-7));
-        boolean embedded = !world.isSpaceEmpty(candidate, candidate.getBoundingBox().contract(1e-7));
-        if (!embedded && !supported(candidate) && !candidate.isTouchingWater()) airborneTicks++;
+        boolean throughBlocks = phase.get() && !world.noCollision(candidate, candidate.getBoundingBox().expandTowards(delta).deflate(1e-7));
+        boolean embedded = !world.noCollision(candidate, candidate.getBoundingBox().deflate(1e-7));
+        if (!embedded && !supported(candidate) && !candidate.isInWater()) airborneTicks++;
         else airborneTicks = 0;
         if (throughBlocks) {
             if (adaptive) {
                 step = motion.plan(point(from), forward, sideways, up, down, yaw, solidSpeed, travelVerticalSpeed(), floor, ceiling, false);
                 step = BoatPhaseMotion.collisionStep(step, phaseHorizontalSpeed.get(), p -> {
-                    Vec3d desired = new Vec3d(p.x(), p.y(), p.z());
-                    return point(Entity.adjustMovementForCollisions(candidate, desired, candidate.getBoundingBox(), world,
-                        world.getEntityCollisions(candidate, candidate.getBoundingBox().stretch(desired))));
+                    Vec3 desired = new Vec3(p.x(), p.y(), p.z());
+                    return point(Entity.collideBoundingBox(candidate, desired, candidate.getBoundingBox(), world,
+                        world.getEntityCollisions(candidate, candidate.getBoundingBox().expandTowards(desired))));
                 });
                 if (Math.hypot(step.x(), step.z()) > phaseHorizontalSpeed.get() + 1e-6) lastAdaptiveTick = motion.tick();
             } else step = BoatPhaseMotion.phaseStep(step, Math.min(phaseHorizontalSpeed.get(), BoatPhaseMotion.PROVEN_PHASE_HORIZONTAL));
-            delta = new Vec3d(step.x(), step.y(), step.z());
+            delta = new Vec3(step.x(), step.y(), step.z());
         } else {
             step = motion.plan(point(from), forward, sideways, up, down, yaw, airSpeed, travelVerticalSpeed(), floor, ceiling, false);
             step = BoatPhaseMotion.airStep(step, BoatPhaseMotion.horizontalStep(point(lastStep), airLimit), airAcceleration.get(), airborneTicks,
                 antiKick.get(), up || down || motion.diveRemaining() > 0 || motion.riseRemaining() > 0, from.y - floor);
-            delta = new Vec3d(step.x(), step.y(), step.z());
-            if (phase.get() && !world.isSpaceEmpty(candidate, candidate.getBoundingBox().stretch(delta).contract(1e-7))) {
+            delta = new Vec3(step.x(), step.y(), step.z());
+            if (phase.get() && !world.noCollision(candidate, candidate.getBoundingBox().expandTowards(delta).deflate(1e-7))) {
                 throughBlocks = true;
                 step = BoatPhaseMotion.horizontalStep(step, horizontalLimit.get());
                 step = BoatPhaseMotion.phaseStep(step, Math.min(phaseHorizontalSpeed.get(), BoatPhaseMotion.PROVEN_PHASE_HORIZONTAL));
-                delta = new Vec3d(step.x(), step.y(), step.z());
+                delta = new Vec3(step.x(), step.y(), step.z());
             }
         }
-        Vec3d waterStep=waterDeparture(candidate,delta.y);
+        Vec3 waterStep=waterDeparture(candidate,delta.y);
         if(waterStep!=null) {delta=waterStep;throughBlocks=false;}
         plannedThroughBlocks = throughBlocks;
-        Box path = candidate.getBoundingBox().stretch(delta);
+        AABB path = candidate.getBoundingBox().expandTowards(delta);
         if (!loaded(path)) {
             status = "waiting for chunks";
-            delta = Vec3d.ZERO;
+            delta = Vec3.ZERO;
             motion.cancelTravel();
         } else if (stopLava.get() && containsLava(path)) {
             status = "lava ahead";
-            delta = Vec3d.ZERO;
+            delta = Vec3.ZERO;
             motion.cancelTravel();
         } else if (motion.diveRemaining() > 0 && from.y + delta.y <= floor + 1e-6) {
             status = "world floor";
@@ -400,40 +399,40 @@ public final class BoatPhase extends Module {
             motion.cancelTravel();
             plannedThroughBlocks = false;
             status = shot.travelBlockReason();
-            delta = Vec3d.ZERO;
+            delta = Vec3.ZERO;
         }
         plannedClear = !throughBlocks && clearTravel(candidate, delta);
         delta = hashStep(candidate, delta);
-        candidate.setVelocity(delta);
+        candidate.setDeltaMovement(delta);
         return delta;
     }
 
-    private boolean supported(AbstractBoatEntity candidate) {
+    private boolean supported(AbstractBoat candidate) {
         return supported(candidate, .05);
     }
 
-    private boolean supported(AbstractBoatEntity candidate, double depth) {
-        Box b = candidate.getBoundingBox();
-        return mc.world != null && !mc.world.isSpaceEmpty(candidate, new Box(b.minX + 1e-4, b.minY - depth, b.minZ + 1e-4,
+    private boolean supported(AbstractBoat candidate, double depth) {
+        AABB b = candidate.getBoundingBox();
+        return mc.level != null && !mc.level.noCollision(candidate, new AABB(b.minX + 1e-4, b.minY - depth, b.minZ + 1e-4,
             b.maxX - 1e-4, b.minY + 1e-7, b.maxZ - 1e-4));
     }
 
-    public boolean shotReady(AbstractBoatEntity candidate) {
-        return isActive() && owns(candidate) && !correcting && motion.holdTicks() == 0 && mc.currentScreen == null;
+    public boolean shotReady(AbstractBoat candidate) {
+        return isActive() && owns(candidate) && !correcting && motion.holdTicks() == 0 && mc.screen == null;
     }
 
-    private boolean travelReady(AbstractBoatEntity candidate) {
+    private boolean travelReady(AbstractBoat candidate) {
         BoatShot shot=BoatShot.active();
         return isActive() && owns(candidate) && !correcting && motion.holdTicks()==0
-            && (mc.currentScreen==null || shot!=null && shot.inventoryFollowAllowed());
+            && (mc.screen==null || shot!=null && shot.inventoryFollowAllowed());
     }
 
     public double shotVerticalLimit() { return Math.min(9, travelVerticalSpeed()); }
     public double captureVerticalLimit() { return Math.min(45, travelVerticalSpeed()); }
-    public double captureCeiling(AbstractBoatEntity candidate) {
-        if(candidate==null || mc.world==null)return Double.NEGATIVE_INFINITY;
-        double top=candidate.streamSelfAndPassengers().mapToDouble(e->e.getBoundingBox().maxY-candidate.getY()).max().orElse(candidate.getHeight());
-        return mc.world.getTopYInclusive()-top;
+    public double captureCeiling(AbstractBoat candidate) {
+        if(candidate==null || mc.level==null)return Double.NEGATIVE_INFINITY;
+        double top=candidate.getSelfAndPassengers().mapToDouble(e->e.getBoundingBox().maxY-candidate.getY()).max().orElse(candidate.getBbHeight());
+        return mc.level.getMaxY()-top;
     }
 
     private double travelVerticalSpeed() { return verticalRejected ? Math.min(9, verticalSpeed.get()) : verticalSpeed.get(); }
@@ -463,103 +462,103 @@ public final class BoatPhase extends Module {
             && world == hashWorld && connection == hashConnection;
     }
 
-    private Vec3d hashStep(AbstractBoatEntity candidate, Vec3d delta) {
+    private Vec3 hashStep(AbstractBoat candidate, Vec3 delta) {
         plannedHashTick = -1;
         if (Math.abs(delta.y) > BoatPhaseVertical.STEP) return delta;
-        if (!hashReady() || delta.horizontalLength() <= horizontalLimit.get()) return delta;
+        if (!hashReady() || delta.horizontalDistance() <= horizontalLimit.get()) return delta;
 
-        candidate.setYaw(MathHelper.wrapDegrees(candidate.getYaw()));
-        candidate.setPitch(MathHelper.wrapDegrees(candidate.getPitch()));
-        Vec3d to = candidate.getEntityPos().add(delta);
-        double y = BoatPhaseHash.altitude(to.x,to.y,to.z,candidate.getYaw(),candidate.getPitch(),correctionHash);
-        Vec3d adjusted = new Vec3d(delta.x,y-candidate.getY(),delta.z);
+        candidate.setYRot(Mth.wrapDegrees(candidate.getYRot()));
+        candidate.setXRot(Mth.wrapDegrees(candidate.getXRot()));
+        Vec3 to = candidate.position().add(delta);
+        double y = BoatPhaseHash.altitude(to.x,to.y,to.z,candidate.getYRot(),candidate.getXRot(),correctionHash);
+        Vec3 adjusted = new Vec3(delta.x,y-candidate.getY(),delta.z);
         BoatShot shot = BoatShot.active();
-        if (!Double.isFinite(y) || !clearTravel(candidate,adjusted) || shot != null && !shot.safeTravel(candidate,adjusted)) return Vec3d.ZERO;
+        if (!Double.isFinite(y) || !clearTravel(candidate,adjusted) || shot != null && !shot.safeTravel(candidate,adjusted)) return Vec3.ZERO;
         plannedHashTick = motion.tick();
         return adjusted;
     }
 
-    public boolean clearTravel(AbstractBoatEntity candidate, Vec3d delta) {
-        if (!travelReady(candidate) || !Double.isFinite(delta.lengthSquared()) || delta.length() > Math.hypot(BoatPhaseVertical.MAX_SPEED, BoatPhaseAirSteps.TRIAL_SPEED)) return false;
+    public boolean clearTravel(AbstractBoat candidate, Vec3 delta) {
+        if (!travelReady(candidate) || !Double.isFinite(delta.lengthSqr()) || delta.length() > Math.hypot(BoatPhaseVertical.MAX_SPEED, BoatPhaseAirSteps.TRIAL_SPEED)) return false;
         return clearRoute(candidate,delta);
     }
 
-    public boolean clearRoute(AbstractBoatEntity candidate, Vec3d delta) {
-        if (!travelReady(candidate) || !Double.isFinite(delta.lengthSquared()) || delta.length()>192) return false;
-        for (Entity entity : candidate.streamSelfAndPassengers().toList()) {
-            Box path = entity.getBoundingBox().stretch(delta).contract(1e-7);
-            if (path.minY < world.getBottomY()+2 || path.maxY > world.getTopYInclusive()+1 || !loaded(path)
-                || !world.getWorldBorder().contains(path) || !world.isSpaceEmpty(entity, path) || containsFluid(path)) return false;
+    public boolean clearRoute(AbstractBoat candidate, Vec3 delta) {
+        if (!travelReady(candidate) || !Double.isFinite(delta.lengthSqr()) || delta.length()>192) return false;
+        for (Entity entity : candidate.getSelfAndPassengers().toList()) {
+            AABB path = entity.getBoundingBox().expandTowards(delta).deflate(1e-7);
+            if (path.minY < world.getMinY()+2 || path.maxY > world.getMaxY()+1 || !loaded(path)
+                || !world.getWorldBorder().isWithinBounds(path) || !world.noCollision(entity, path) || containsFluid(path)) return false;
         }
         return true;
     }
 
-    public boolean shotPathClear(AbstractBoatEntity candidate, Vec3d delta) {
+    public boolean shotPathClear(AbstractBoat candidate, Vec3 delta) {
         if (!shotReady(candidate) || !Double.isFinite(delta.y) || delta.x != 0 || delta.z != 0
             || Math.abs(delta.y) > BoatShotCycle.MAX_BURST + 1e-7) return false;
-        for (Entity entity : candidate.streamSelfAndPassengers().toList()) {
-            Box path = entity.getBoundingBox().stretch(delta).contract(1e-7);
-            if (path.minY < world.getBottomY() + 2 || path.maxY > world.getTopYInclusive() + 1
-                || !loaded(path) || !world.getWorldBorder().contains(path)
-                || !world.isSpaceEmpty(entity, path) || containsFluid(path)) return false;
+        for (Entity entity : candidate.getSelfAndPassengers().toList()) {
+            AABB path = entity.getBoundingBox().expandTowards(delta).deflate(1e-7);
+            if (path.minY < world.getMinY() + 2 || path.maxY > world.getMaxY() + 1
+                || !loaded(path) || !world.getWorldBorder().isWithinBounds(path)
+                || !world.noCollision(entity, path) || containsFluid(path)) return false;
         }
         return true;
     }
 
-    public void afterMove(AbstractBoatEntity candidate) {
+    public void afterMove(AbstractBoat candidate) {
         if (!owns(candidate)) return;
-        boolean ground = candidate.getVelocity().y <= 0 && supported(candidate);
+        boolean ground = candidate.getDeltaMovement().y <= 0 && supported(candidate);
         candidate.setOnGround(ground);
-        candidate.groundCollision = ground;
+        candidate.verticalCollisionBelow = ground;
         if (!plannedThroughBlocks && !ground) candidate.verticalCollision = false;
     }
 
-    private boolean loaded(Box box) {
+    private boolean loaded(AABB box) {
         for (int x = ((int) Math.floor(box.minX)) >> 4; x <= ((int) Math.floor(box.maxX)) >> 4; x++) {
             for (int z = ((int) Math.floor(box.minZ)) >> 4; z <= ((int) Math.floor(box.maxZ)) >> 4; z++) {
-                if (!world.getChunkManager().isChunkLoaded(x, z)) return false;
+                if (!world.getChunkSource().hasChunk(x, z)) return false;
             }
         }
         return true;
     }
 
-    private boolean containsLava(Box box) {
-        for (BlockPos pos : BlockPos.iterate((int) Math.floor(box.minX), (int) Math.floor(box.minY), (int) Math.floor(box.minZ),
+    private boolean containsLava(AABB box) {
+        for (BlockPos pos : BlockPos.betweenClosed((int) Math.floor(box.minX), (int) Math.floor(box.minY), (int) Math.floor(box.minZ),
             (int) Math.floor(box.maxX), (int) Math.floor(box.maxY), (int) Math.floor(box.maxZ))) {
-            if (world.getFluidState(pos).isIn(FluidTags.LAVA)) return true;
+            if (world.getFluidState(pos).is(FluidTags.LAVA)) return true;
         }
         return false;
     }
 
-    private boolean containsFluid(Box box) {
-        for (BlockPos pos : BlockPos.iterate((int) Math.floor(box.minX), (int) Math.floor(box.minY), (int) Math.floor(box.minZ),
+    private boolean containsFluid(AABB box) {
+        for (BlockPos pos : BlockPos.betweenClosed((int) Math.floor(box.minX), (int) Math.floor(box.minY), (int) Math.floor(box.minZ),
             (int) Math.floor(box.maxX), (int) Math.floor(box.maxY), (int) Math.floor(box.maxZ))) {
             if (!world.getFluidState(pos).isEmpty()) return true;
         }
         return false;
     }
 
-    private boolean containsWater(Box box) {
-        for(BlockPos pos:BlockPos.iterate(BlockPos.ofFloored(box.minX,box.minY,box.minZ),BlockPos.ofFloored(box.maxX,box.maxY,box.maxZ)))
-            if(world.getFluidState(pos).isIn(FluidTags.WATER))return true;
+    private boolean containsWater(AABB box) {
+        for(BlockPos pos:BlockPos.betweenClosed(BlockPos.containing(box.minX,box.minY,box.minZ),BlockPos.containing(box.maxX,box.maxY,box.maxZ)))
+            if(world.getFluidState(pos).is(FluidTags.WATER))return true;
         return false;
     }
 
-    public Vec3d waterDeparture(AbstractBoatEntity candidate,double ascent) {
+    public Vec3 waterDeparture(AbstractBoat candidate,double ascent) {
         if(candidate==null||world==null||!Double.isFinite(ascent)||ascent<=0||!containsWater(candidate.getBoundingBox()))return null;
-        Vec3d step=new Vec3d(0,Math.min(.5,ascent),0);
-        return clearWaterExit(candidate,step)?step:Vec3d.ZERO;
+        Vec3 step=new Vec3(0,Math.min(.5,ascent),0);
+        return clearWaterExit(candidate,step)?step:Vec3.ZERO;
     }
 
-    private boolean clearWaterExit(AbstractBoatEntity candidate,Vec3d step) {
-        if(!travelReady(candidate)||!Double.isFinite(step.lengthSquared())||step.y<=0||step.y>.5||step.horizontalLengthSquared()!=0)return false;
-        for(Entity entity:candidate.streamSelfAndPassengers().toList()) {
-            Box path=entity.getBoundingBox().stretch(step).contract(1e-7);
-            if(path.minY<world.getBottomY()+2||path.maxY>world.getTopYInclusive()+1||!loaded(path)
-                ||!world.getWorldBorder().contains(path)||!world.isSpaceEmpty(entity,path))return false;
-            for(BlockPos pos:BlockPos.iterate(BlockPos.ofFloored(path.minX,path.minY,path.minZ),BlockPos.ofFloored(path.maxX,path.maxY,path.maxZ))) {
+    private boolean clearWaterExit(AbstractBoat candidate,Vec3 step) {
+        if(!travelReady(candidate)||!Double.isFinite(step.lengthSqr())||step.y<=0||step.y>.5||step.horizontalDistanceSqr()!=0)return false;
+        for(Entity entity:candidate.getSelfAndPassengers().toList()) {
+            AABB path=entity.getBoundingBox().expandTowards(step).deflate(1e-7);
+            if(path.minY<world.getMinY()+2||path.maxY>world.getMaxY()+1||!loaded(path)
+                ||!world.getWorldBorder().isWithinBounds(path)||!world.noCollision(entity,path))return false;
+            for(BlockPos pos:BlockPos.betweenClosed(BlockPos.containing(path.minX,path.minY,path.minZ),BlockPos.containing(path.maxX,path.maxY,path.maxZ))) {
                 var fluid=world.getFluidState(pos);
-                if(!fluid.isEmpty()&&!fluid.isIn(FluidTags.WATER))return false;
+                if(!fluid.isEmpty()&&!fluid.is(FluidTags.WATER))return false;
             }
         }
         return true;
@@ -567,19 +566,19 @@ public final class BoatPhase extends Module {
 
     @EventHandler(priority = EventPriority.HIGHEST)
     private void onTick(TickEvent.Pre event) {
-        if (mc.player != null && !eventGate.tick(mc.player, mc.player.age)) return;
-        ClientConnection currentConnection = mc.getNetworkHandler() == null ? null : mc.getNetworkHandler().getConnection();
+        if (mc.player != null && !eventGate.tick(mc.player, mc.player.tickCount)) return;
+        Connection currentConnection = mc.getConnection() == null ? null : mc.getConnection().getConnection();
         if (travelConnection != currentConnection) { travel.retry(); verticalRejected = false; remount.reset(); travelConnection = currentConnection; }
-        if (travelWorld != mc.world) { remount.reset(); travelWorld=mc.world; }
-        if (hashWorld != mc.world || mc.getNetworkHandler() == null || hashConnection != mc.getNetworkHandler().getConnection()) {
+        if (travelWorld != mc.level) { remount.reset(); travelWorld=mc.level; }
+        if (hashWorld != mc.level || mc.getConnection() == null || hashConnection != mc.getConnection().getConnection()) {
             correctionHash = null; hashWorld = null; hashConnection = null;
         }
         if (boat != null && sameSession()) {
-            if (Input.isPressed(mc.options.sneakKey)) lastSneakTick = motion.tick();
-            if (supported(boat)) lastGroundedAge = mc.player.age;
+            if (Input.isPressed(mc.options.keyShift)) lastSneakTick = motion.tick();
+            if (supported(boat)) lastGroundedAge = mc.player.tickCount;
             drainObservations();
         }
-        AbstractBoatEntity current = mc.player != null && mc.player.getRootVehicle() instanceof AbstractBoatEntity b ? b : null;
+        AbstractBoat current = mc.player != null && mc.player.getRootVehicle() instanceof AbstractBoat b ? b : null;
         boolean controlling = current != null && current.getControllingPassenger() == mc.player;
         if (!sameSession() || boat != current || controlling != driver || (mc.player != null && !mc.player.isAlive())) {
             detach();
@@ -596,15 +595,15 @@ public final class BoatPhase extends Module {
         }
         if (driver) {
             if (pauseOthers.get()) pauseConflicts();
-            boolean guest = boat.getPassengerList().size() > 1;
+            boolean guest = boat.getPassengers().size() > 1;
             if (guest && !hadGuest && diveWithPassenger.get()) toggleDive();
             hadGuest = guest;
             if (motion.holdTicks() > 0) status = "correction hold " + motion.holdTicks();
         } else status = "passenger - observing";
         if (motion.tick() % 20 == 0) {
             record("STATE role=%s boat=%d local=%s wire=%s passengers=%s inside=%b health=%.1f tx=%d corrections=%d status=%s",
-                driver ? "driver" : "passenger", boat.getId(), boat.getEntityPos(), lastWire, boat.getPassengerList().stream().map(Entity::getId).toList(),
-                !world.isSpaceEmpty(boat, boat.getBoundingBox()), mc.player.getHealth() + mc.player.getAbsorptionAmount(), sentCount, corrections, status);
+                driver ? "driver" : "passenger", boat.getId(), boat.position(), lastWire, boat.getPassengers().stream().map(Entity::getId).toList(),
+                !world.noCollision(boat, boat.getBoundingBox()), mc.player.getHealth() + mc.player.getAbsorptionAmount(), sentCount, corrections, status);
             long now = System.nanoTime();
             record("SPEED sentBpt=%.3f sentBps=%.2f echoBpt=%.3f echoBps=%.2f packetsLastTick=%d mode=%s elapsedMs=%d",
                 meter.sentBpt(), meter.sentBps(), meter.echoBpt(now), meter.echoBps(now), meter.packetsLastTick(), modeDescription,
@@ -613,14 +612,14 @@ public final class BoatPhase extends Module {
         }
     }
 
-    private void attach(AbstractBoatEntity current, boolean controlling) {
+    private void attach(AbstractBoat current, boolean controlling) {
         boat = current;
         player = mc.player;
-        world = mc.world;
-        network = mc.getNetworkHandler();
+        world = mc.level;
+        network = mc.getConnection();
         connection = network.getConnection();
         driver = controlling;
-        lastWire = boat.getEntityPos();
+        lastWire = boat.position();
         motion.reset();
         adaptiveBlocked = false;
         lastAdaptiveTick = lastSneakTick = -100;
@@ -636,7 +635,7 @@ public final class BoatPhase extends Module {
         entryHeight = boat.getY();
         hadGuest = false;
         openLog();
-        boolean retryToken = remount.board(boat.getId(), player.age, driver, remountRetry.get() || landedRetry.get());
+        boolean retryToken = remount.board(boat.getId(), player.tickCount, driver, remountRetry.get() || landedRetry.get());
         record("RETRY-CHECK token=%b driver=%b substepRejected=%b reason=%s", retryToken, driver,
             travel.rejected(BoatPhaseTravel.Mode.SUBSTEPS), boardingRetryReason);
         if (retryToken && remountRetry.get() && (travel.flightRejected() || verticalRejected)) {
@@ -652,7 +651,7 @@ public final class BoatPhase extends Module {
             info("Landed remount: retrying air substeps at %.2f b/t.",substepSpeed.get());
         }
         record("MOUNT boat=%d type=%s role=%s position=%s passengers=%s", boat.getId(), boat.getType(), driver ? "driver" : "passenger",
-            boat.getEntityPos(), boat.getPassengerList().stream().map(Entity::getId).toList());
+            boat.position(), boat.getPassengers().stream().map(Entity::getId).toList());
         if (driver && pauseOthers.get()) pauseConflicts();
         info(driver ? "Boat ready. WASD steers, jump rises, sprint descends; sneak dismounts." : "Passenger seat: observing the driver's boat; no movement controls are sent.");
     }
@@ -660,8 +659,8 @@ public final class BoatPhase extends Module {
     private void detach() {
         if (boat != null && driver) {
             boolean deliberate = sameSession() && player.isAlive() && player.getRootVehicle()!=boat && recentSneak();
-            if (sameSession()) remount.intent(boat.getId(), player.age,
-                remountRetry.get() || supported(boat) || player.age - lastGroundedAge <= 5, deliberate,
+            if (sameSession()) remount.intent(boat.getId(), player.tickCount,
+                remountRetry.get() || supported(boat) || player.tickCount - lastGroundedAge <= 5, deliberate,
                 retryableFallback(), remountRetry.get() || landedRetry.get());
         }
         epoch++;
@@ -677,7 +676,7 @@ public final class BoatPhase extends Module {
         lastFastVerticalTick = -100;
         plannedHashTick = -1;
         meter.reset();
-        if (boat != null && driver && !boat.isRemoved()) boat.setVelocity(Vec3d.ZERO);
+        if (boat != null && driver && !boat.isRemoved()) boat.setDeltaMovement(Vec3.ZERO);
         for (Module module : paused) if (!module.isActive()) module.toggle();
         paused.clear();
         boat = null;
@@ -689,7 +688,7 @@ public final class BoatPhase extends Module {
         airborneTicks = 0;
         lastAdaptiveTick = -100;
         lastGroundedAge = -1000;
-        lastStep = Vec3d.ZERO;
+        lastStep = Vec3.ZERO;
         lastWire = plannedFrom = null;
         plannedTick = -1;
         motion.reset();
@@ -716,7 +715,7 @@ public final class BoatPhase extends Module {
             travelName = "Quick dive";
             requestedDiveDistance = diveDistance.get();
             motion.dive(requestedDiveDistance);
-            record("DIVE distance=%.2f start=%s", requestedDiveDistance, boat.getEntityPos());
+            record("DIVE distance=%.2f start=%s", requestedDiveDistance, boat.position());
             info("Diving %.0f blocks. Jump cancels.", requestedDiveDistance);
         }
     }
@@ -724,7 +723,7 @@ public final class BoatPhase extends Module {
     private void toggleCruise() {
         if (!isActive() || boat == null || !owns(boat)) { info("Board the driver's seat first."); return; }
         cruising = !cruising;
-        cruiseYaw = mc.player.getYaw();
+        cruiseYaw = mc.player.getYRot();
         info(cruising ? "Cruise started. WASD cancels; jump and sprint control height." : "Cruise canceled.");
         record("CRUISE active=%b yaw=%.2f", cruising, cruiseYaw);
     }
@@ -749,15 +748,15 @@ public final class BoatPhase extends Module {
 
     private void surface() {
         if (!isActive() || boat == null || !owns(boat)) { info("Board the driver's seat first."); return; }
-        double max = Math.min(128, world.getTopYInclusive() - boat.getBoundingBox().maxY);
+        double max = Math.min(128, world.getMaxY() - boat.getBoundingBox().maxY);
         for (int dy = 1; dy <= max; dy++) {
-            Box target = boat.getBoundingBox().offset(0, dy, 0);
+            AABB target = boat.getBoundingBox().move(0, dy, 0);
             if (!loaded(target)) break;
-            if (!world.isSpaceEmpty(boat, target) || containsFluid(target)) continue;
+            if (!world.noCollision(boat, target) || containsFluid(target)) continue;
             boolean clear = true;
-            for (Entity passenger : boat.getPassengerList()) {
-                Box passengerBox = passenger.getBoundingBox().offset(0, dy, 0);
-                if (passengerBox.maxY > world.getTopYInclusive() + 1 || !world.isSpaceEmpty(passenger, passengerBox) || containsFluid(passengerBox)) { clear = false; break; }
+            for (Entity passenger : boat.getPassengers()) {
+                AABB passengerBox = passenger.getBoundingBox().move(0, dy, 0);
+                if (passengerBox.maxY > world.getMaxY() + 1 || !world.noCollision(passenger, passengerBox) || containsFluid(passengerBox)) { clear = false; break; }
             }
             if (clear) { travelToHeight(boat.getY() + dy, "Clear pocket"); return; }
         }
@@ -767,7 +766,7 @@ public final class BoatPhase extends Module {
     private void recover() {
         cruising = false;
         meter.reset();
-        lastStep = Vec3d.ZERO;
+        lastStep = Vec3.ZERO;
         airborneTicks = 0;
         if (!adaptiveBlocked && !recentSneak() && motion.tick() - lastAdaptiveTick <= 10) {
             adaptiveBlocked = true;
@@ -799,7 +798,7 @@ public final class BoatPhase extends Module {
         table.add(theme.button("Retry fast air")).expandX().widget().action = () -> {
             travel.retry();
             verticalRejected = false;
-            lastStep = Vec3d.ZERO;
+            lastStep = Vec3.ZERO;
             record("SPEED-RETRY mode=%s", modeDescription());
             info("Speed fallback cleared. %s", modeDescription());
         };
@@ -808,28 +807,28 @@ public final class BoatPhase extends Module {
 
     @EventHandler(priority = EventPriority.LOWEST - 100)
     private void onSend(PacketEvent.Send event) {
-        if (!event.isCancelled() && mc.isOnThread() && mc.player != null && mc.world != null
-            && mc.getNetworkHandler() != null && event.connection == mc.getNetworkHandler().getConnection()
-            && !mc.player.hasVehicle() && event.packet instanceof PlayerInteractEntityC2SPacket interaction
+        if (!event.isCancelled() && mc.isSameThread() && mc.player != null && mc.level != null
+            && mc.getConnection() != null && event.connection == mc.getConnection().getConnection()
+            && !mc.player.isPassenger() && event.packet instanceof ServerboundInteractPacket interaction
             && lastBoardInteraction != interaction) {
             lastBoardInteraction = interaction;
             boolean[] use = {false};
-            interaction.handle(new PlayerInteractEntityC2SPacket.Handler() {
-                @Override public void interact(Hand hand) { use[0] = true; }
-                @Override public void interactAt(Hand hand, Vec3d position) { use[0] = true; }
-                @Override public void attack() {}
+            interaction.dispatch(new ServerboundInteractPacket.Handler() {
+                @Override public void onInteraction(InteractionHand hand) { use[0] = true; }
+                @Override public void onInteraction(InteractionHand hand, Vec3 position) { use[0] = true; }
+                @Override public void onAttack() {}
             });
-            if (use[0] && ((IPlayerInteractEntityC2SPacket)interaction).meteor$getEntity() instanceof AbstractBoatEntity candidate) {
+            if (use[0] && ((IPlayerInteractEntityC2SPacket)interaction).meteor$getEntity() instanceof AbstractBoat candidate) {
 
                 boolean grounded = supported(candidate, .35);
-                boolean armed = remount.intent(candidate.getId(), mc.player.age, grounded || remountRetry.get(), true,
+                boolean armed = remount.intent(candidate.getId(), mc.player.tickCount, grounded || remountRetry.get(), true,
                     retryableFallback(), remountRetry.get() || landedRetry.get());
                 boardingRetryReason = armed ? "deliberate boarding" : !landedRetry.get() && !remountRetry.get() ? "retry disabled"
                     : !retryableFallback() ? "no flight rejection; terrain limits are separate"
                     : "boat not landed";
             }
         }
-        if (event.isCancelled() || !(event.packet instanceof VehicleMoveC2SPacket packet) || boat == null || !owns(boat) || event.connection != connection || correcting) return;
+        if (event.isCancelled() || !(event.packet instanceof ServerboundMoveVehiclePacket packet) || boat == null || !owns(boat) || event.connection != connection || correcting) return;
         if (packet == substepPacket) return;
         if (splitting) { event.cancel(); return; }
         if (motion.alreadySent()) {
@@ -838,28 +837,28 @@ public final class BoatPhase extends Module {
             return;
         }
         if (plannedHashTick == motion.tick() && hashReady()) {
-            Vec3d p = packet.position();
-            if (BoatPhaseHash.hash(p.x,p.y,p.z,MathHelper.wrapDegrees(packet.yaw()),MathHelper.wrapDegrees(packet.pitch())) != correctionHash) {
+            Vec3 p = packet.position();
+            if (BoatPhaseHash.hash(p.x,p.y,p.z,Mth.wrapDegrees(packet.yRot()),Mth.wrapDegrees(packet.xRot())) != correctionHash) {
                 event.cancel();
-                if (lastWire != null) boat.setPosition(lastWire);
-                boat.setVelocity(Vec3d.ZERO);
+                if (lastWire != null) boat.setPos(lastWire);
+                boat.setDeltaMovement(Vec3.ZERO);
                 travel.reject(BoatPhaseTravel.Mode.HASH);
                 record("HASH-STOP outgoing coordinates or rotation changed");
             }
             return;
         }
         if (lastWire != null) {
-            Vec3d delta = packet.position().subtract(lastWire);
+            Vec3 delta = packet.position().subtract(lastWire);
             boolean horizontalBatch = (plannedMode == BoatPhaseTravel.Mode.SUBSTEPS || plannedMode == BoatPhaseTravel.Mode.EXTENDED)
                 && !plannedThroughBlocks;
-            int horizontalCount = horizontalBatch ? BoatPhaseAirSteps.count(delta.horizontalLength(), plannedMode == BoatPhaseTravel.Mode.EXTENDED
+            int horizontalCount = horizontalBatch ? BoatPhaseAirSteps.count(delta.horizontalDistance(), plannedMode == BoatPhaseTravel.Mode.EXTENDED
                 ? BoatPhaseAirSteps.TRIAL_PACKETS : BoatPhaseAirSteps.MAX_PACKETS) : 1;
             int verticalCount = plannedShotMovement ? 1 : BoatPhaseVertical.count(delta.y);
             int count = Math.max(horizontalCount, verticalCount);
 
             if (horizontalCount == 0 || verticalCount == 0 || count > 1 && (plannedTick != motion.tick()
                 || plannedFrom == null || plannedFrom.distanceTo(lastWire) > 1e-4 || !plannedClear && !plannedThroughBlocks)) {
-                event.cancel(); boat.setPosition(lastWire); boat.setVelocity(Vec3d.ZERO);
+                event.cancel(); boat.setPos(lastWire); boat.setDeltaMovement(Vec3.ZERO);
                 record("STEPS-STOP unverified sweep or packet budget; oversized update suppressed");
                 return;
             }
@@ -869,9 +868,9 @@ public final class BoatPhase extends Module {
                 substepOrigin = lastWire;
                 try {
                     for (int i = 1; i <= count; i++) {
-                        Vec3d end = substepOrigin.add(delta.multiply((double)i/count));
-                        substepPacket = new VehicleMoveC2SPacket(end, packet.yaw(), packet.pitch(), packet.onGround());
-                        network.sendPacket(substepPacket);
+                        Vec3 end = substepOrigin.add(delta.scale((double)i/count));
+                        substepPacket = new ServerboundMoveVehiclePacket(end, packet.yRot(), packet.xRot(), packet.onGround());
+                        network.send(substepPacket);
                         if (lastWire.distanceTo(end) > 1e-5) break;
                     }
                 } finally { substepPacket = null; splitting = false; }
@@ -881,17 +880,17 @@ public final class BoatPhase extends Module {
                     lastFastVerticalTick = motion.tick();
                     travel.newRide();
                 } else if (horizontalBatch) {
-                    if (lastStep.horizontalLength() > horizontalLimit.get() + 1e-6) lastFastVerticalTick = -100;
-                    travel.sent(lastStep.horizontalLength() > BoatPhaseAirSteps.MAX_SPEED + 1e-6
+                    if (lastStep.horizontalDistance() > horizontalLimit.get() + 1e-6) lastFastVerticalTick = -100;
+                    travel.sent(lastStep.horizontalDistance() > BoatPhaseAirSteps.MAX_SPEED + 1e-6
                         ? BoatPhaseTravel.Mode.EXTENDED : BoatPhaseTravel.Mode.SUBSTEPS,
-                        motion.tick(), lastStep.horizontalLength(), horizontalLimit.get());
+                        motion.tick(), lastStep.horizontalDistance(), horizontalLimit.get());
                 }
                 if (lastWire.distanceTo(packet.position()) > 1e-5) {
-                    boat.setPosition(lastWire);
-                    boat.setVelocity(Vec3d.ZERO);
+                    boat.setPos(lastWire);
+                    boat.setDeltaMovement(Vec3.ZERO);
                     record("SUBSTEP-INTERRUPTED position=%s", lastWire);
                 }
-                record("AIR-STEPS count=%d total=%s horizontal=%.3f", count, lastStep, lastStep.horizontalLength());
+                record("AIR-STEPS count=%d total=%s horizontal=%.3f", count, lastStep, lastStep.horizontalDistance());
                 if (finished) info("%s movement sent: %.1f blocks.", travelName, requestedDiveDistance);
             }
         }
@@ -899,14 +898,14 @@ public final class BoatPhase extends Module {
 
     @EventHandler(priority = EventPriority.LOWEST - 100)
     private void onSent(PacketEvent.Sent event) {
-        if (event.packet instanceof PlayerInputC2SPacket input && boat != null && sameSession() && event.connection == connection) {
+        if (event.packet instanceof ServerboundPlayerInputPacket input && boat != null && sameSession() && event.connection == connection) {
             if (lastInputPacket == input) return;
             lastInputPacket = input;
-            sentSneak = input.input().sneak();
+            sentSneak = input.input().shift();
             if (sentSneak) lastSneakTick = motion.tick();
             record("INPUT %s", input.input());
         }
-        if (!(event.packet instanceof VehicleMoveC2SPacket packet) || boat == null || !owns(boat) || event.connection != connection) return;
+        if (!(event.packet instanceof ServerboundMoveVehiclePacket packet) || boat == null || !owns(boat) || event.connection != connection) return;
 
         if (!eventGate.vehicle(packet)) return;
         if (packet == substepPacket && splitting) {
@@ -922,7 +921,7 @@ public final class BoatPhase extends Module {
             record("CORRECTION-ACK position=%s", packet.position());
             return;
         }
-        Vec3d from = lastWire == null ? packet.position() : lastWire;
+        Vec3 from = lastWire == null ? packet.position() : lastWire;
         boolean finished = motion.sent(point(from), point(packet.position()));
         lastWire = packet.position();
         lastStep = lastWire.subtract(from);
@@ -933,35 +932,35 @@ public final class BoatPhase extends Module {
             travel.newRide();
             lastFastVerticalTick = -100;
         } else {
-            travel.sent(sentMode, motion.tick(), lastStep.horizontalLength(), horizontalLimit.get());
-            if (sentMode != BoatPhaseTravel.Mode.LIMITED && lastStep.horizontalLength() > horizontalLimit.get() + 1e-6) lastFastVerticalTick = -100;
+            travel.sent(sentMode, motion.tick(), lastStep.horizontalDistance(), horizontalLimit.get());
+            if (sentMode != BoatPhaseTravel.Mode.LIMITED && lastStep.horizontalDistance() > horizontalLimit.get() + 1e-6) lastFastVerticalTick = -100;
         }
-        if (plannedHashTick == motion.tick() && lastStep.horizontalLength() > horizontalLimit.get()) {
-            record("HASH-WIRE horizontal=%.3f hash=%d",lastStep.horizontalLength(),correctionHash);
+        if (plannedHashTick == motion.tick() && lastStep.horizontalDistance() > horizontalLimit.get()) {
+            record("HASH-WIRE horizontal=%.3f hash=%d",lastStep.horizontalDistance(),correctionHash);
         }
         sentCount++;
         record("WIRE from=%s to=%s delta=%s local=%s plannedFrom=%s plannedTick=%d inside=%b passengers=%d ground=%b airTicks=%d horizontalLimit=%.3f fallback=%b status=%s",
-            from, lastWire, lastWire.subtract(from), boat.getEntityPos(), plannedFrom, plannedTick,
-            !world.isSpaceEmpty(boat, boat.getBoundingBox()), boat.getPassengerList().size(), packet.onGround(), airborneTicks, horizontalLimit.get(), adaptiveBlocked, status);
+            from, lastWire, lastWire.subtract(from), boat.position(), plannedFrom, plannedTick,
+            !world.noCollision(boat, boat.getBoundingBox()), boat.getPassengers().size(), packet.onGround(), airborneTicks, horizontalLimit.get(), adaptiveBlocked, status);
         if (finished) info("%s movement sent: %.1f blocks.", travelName, requestedDiveDistance);
     }
 
-    public void beforeVehicleCorrection(ClientPlayNetworkHandler handler, VehicleMoveS2CPacket packet) {
+    public void beforeVehicleCorrection(ClientPacketListener handler, ClientboundMoveVehiclePacket packet) {
         if (handler != network || boat == null || !owns(boat)) return;
         if (lastVehicleCorrection == packet) return;
         lastVehicleCorrection = packet;
         rejectFastAir();
         correcting = true;
         corrections++;
-        record("VEHICLE-CORRECTION server=%s local=%s lastWire=%s error=%.3f", packet.position(), boat.getEntityPos(), lastWire,
-            packet.position().distanceTo(boat.getEntityPos()));
+        record("VEHICLE-CORRECTION server=%s local=%s lastWire=%s error=%.3f", packet.position(), boat.position(), lastWire,
+            packet.position().distanceTo(boat.position()));
         recover();
     }
 
-    public void afterVehicleCorrection(ClientPlayNetworkHandler handler, VehicleMoveS2CPacket packet) {
+    public void afterVehicleCorrection(ClientPacketListener handler, ClientboundMoveVehiclePacket packet) {
         if (handler != network || !correcting) return;
         lastWire = packet.position();
-        if (boat != null) boat.setVelocity(Vec3d.ZERO);
+        if (boat != null) boat.setDeltaMovement(Vec3.ZERO);
         correcting = false;
         status = "server correction";
         if (corrections <= 3 || corrections % 10 == 0) warning("Server corrected the boat (#%d). Dive canceled; pausing %d ticks.", corrections, correctionHold.get());
@@ -971,10 +970,10 @@ public final class BoatPhase extends Module {
     private void onPlayerCorrectionBefore(PlayerPositionLookEvent.Before event) {
         if (lastPlayerCorrection == event.packet) return;
         lastPlayerCorrection = event.packet;
-        if (mc.player != null && mc.world != null && mc.getNetworkHandler() != null) {
-            EntityPosition p = EntityPosition.apply(EntityPosition.fromEntity(mc.player), event.packet.change(), event.packet.relatives());
-            correctionHash = BoatPhaseHash.hash(p.position().x,p.position().y,p.position().z,p.yaw(),p.pitch());
-            hashWorld = mc.world; hashConnection = mc.getNetworkHandler().getConnection();
+        if (mc.player != null && mc.level != null && mc.getConnection() != null) {
+            PositionMoveRotation p = PositionMoveRotation.calculateAbsolute(PositionMoveRotation.of(mc.player), event.packet.change(), event.packet.relatives());
+            correctionHash = BoatPhaseHash.hash(p.position().x,p.position().y,p.position().z,p.yRot(),p.xRot());
+            hashWorld = mc.level; hashConnection = mc.getConnection().getConnection();
             record("HASH-REFERENCE hash=%d recentSneak=%b", correctionHash, recentSneak());
         }
         if (boat == null || !driver || !sameSession()) return;
@@ -989,16 +988,16 @@ public final class BoatPhase extends Module {
     private void onPlayerCorrectionAfter(PlayerPositionLookEvent.After event) {
         if (!correcting) return;
         correcting = false;
-        if (boat != null) { lastWire = boat.getEntityPos(); boat.setVelocity(Vec3d.ZERO); }
+        if (boat != null) { lastWire = boat.position(); boat.setDeltaMovement(Vec3.ZERO); }
     }
 
     @EventHandler
     private void onReceive(PacketEvent.Receive event) {
         long observedEpoch = epoch;
-        ClientConnection owner = connection;
+        Connection owner = connection;
         if (owner == null || event.connection != owner) return;
-        if (!(event.packet instanceof EntityPassengersSetS2CPacket || event.packet instanceof EntityPositionSyncS2CPacket
-            || event.packet instanceof EntityPositionS2CPacket || event.packet instanceof EntityS2CPacket)) return;
+        if (!(event.packet instanceof ClientboundSetPassengersPacket || event.packet instanceof ClientboundEntityPositionSyncPacket
+            || event.packet instanceof ClientboundTeleportEntityPacket || event.packet instanceof ClientboundMoveEntityPacket)) return;
         if (observationCount.incrementAndGet() > 256) { observationCount.decrementAndGet(); return; }
         observations.add(new Observation(observedEpoch, owner, event.packet));
     }
@@ -1011,16 +1010,16 @@ public final class BoatPhase extends Module {
             Packet<?> packet = entry.packet;
             if (lastObservationPacket == packet) continue;
             lastObservationPacket = packet;
-            if (packet instanceof EntityPassengersSetS2CPacket p && p.getEntityId() == boat.getId()) {
-                record("SERVER-PASSENGERS ids=%s", java.util.Arrays.toString(p.getPassengerIds()));
-            } else if (packet instanceof EntityPositionSyncS2CPacket p && p.id() == boat.getId()) {
+            if (packet instanceof ClientboundSetPassengersPacket p && p.getVehicle() == boat.getId()) {
+                record("SERVER-PASSENGERS ids=%s", java.util.Arrays.toString(p.getPassengers()));
+            } else if (packet instanceof ClientboundEntityPositionSyncPacket p && p.id() == boat.getId()) {
                 record("SERVER-BOAT-SYNC values=%s", p.values());
-                Vec3d pos = p.values().position();
+                Vec3 pos = p.values().position();
                 meter.echo(motion.tick(), System.nanoTime(), pos.x, pos.y, pos.z);
-            } else if (packet instanceof EntityPositionS2CPacket p && p.entityId() == boat.getId()) {
+            } else if (packet instanceof ClientboundTeleportEntityPacket p && p.id() == boat.getId()) {
                 record("SERVER-BOAT-POSITION values=%s relatives=%s", p.change(), p.relatives());
-            } else if (packet instanceof EntityS2CPacket p && p.getEntity(world) == boat && p.isPositionChanged()) {
-                record("SERVER-BOAT-DELTA x=%d y=%d z=%d local=%s", p.getDeltaX(), p.getDeltaY(), p.getDeltaZ(), boat.getEntityPos());
+            } else if (packet instanceof ClientboundMoveEntityPacket p && p.getEntity(world) == boat && p.hasPosition()) {
+                record("SERVER-BOAT-DELTA x=%d y=%d z=%d local=%s", p.getXa(), p.getYa(), p.getZa(), boat.position());
             }
         }
     }
@@ -1028,12 +1027,12 @@ public final class BoatPhase extends Module {
     private void openLog() {
         if (!debugFile.get()) return;
         try {
-            Path folder = mc.runDirectory.toPath().resolve("boat-phase");
+            Path folder = mc.gameDirectory.toPath().resolve("boat-phase");
             Files.createDirectories(folder);
             String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
             Path path = folder.resolve("boat-" + time + ".log");
             log = new PrintWriter(Files.newBufferedWriter(path, StandardCharsets.UTF_8));
-            record("BOAT-PHASE v18 server=%s role=%s", mc.getCurrentServerEntry() == null ? "local" : mc.getCurrentServerEntry().address, driver ? "driver" : "passenger");
+            record("BOAT-PHASE v18 server=%s role=%s", mc.getCurrentServer() == null ? "local" : mc.getCurrentServer().ip, driver ? "driver" : "passenger");
             for (SettingGroup group : settings) for (Setting<?> setting : group) record("cfg %s = %s", setting.name, setting.get());
             info("Boat log: %s", path);
         } catch (IOException e) {
@@ -1045,10 +1044,10 @@ public final class BoatPhase extends Module {
         if (log != null) log.printf(Locale.ROOT, "[%d] %s%n", motion.tick(), String.format(Locale.ROOT, format, args));
     }
 
-    private static BoatPhaseMotion.Point point(Vec3d v) { return new BoatPhaseMotion.Point(v.x, v.y, v.z); }
+    private static BoatPhaseMotion.Point point(Vec3 v) { return new BoatPhaseMotion.Point(v.x, v.y, v.z); }
 
     private boolean recentSneak() {
-        return motion.tick() - lastSneakTick <= 10 || (sameSession() && mc.player != null && Input.isPressed(mc.options.sneakKey));
+        return motion.tick() - lastSneakTick <= 10 || (sameSession() && mc.player != null && Input.isPressed(mc.options.keyShift));
     }
 
     private void rejectFastAir() {
@@ -1080,7 +1079,7 @@ public final class BoatPhase extends Module {
         travel.retryFlight();
         verticalRejected = false;
         lastFastVerticalTick = -100;
-        lastStep = Vec3d.ZERO;
+        lastStep = Vec3.ZERO;
         motion.corrected(4);
     }
 
@@ -1107,7 +1106,7 @@ public final class BoatPhase extends Module {
 
     @EventHandler
     private void onRender2D(Render2DEvent event) {
-        if (!speedometer.get() || boat == null || !owns(boat) || mc.options.hudHidden) return;
+        if (!speedometer.get() || boat == null || !owns(boat) || mc.options.hideGui) return;
         long now = System.nanoTime();
         double echo = meter.echoBpt(now);
         String[] lines = {

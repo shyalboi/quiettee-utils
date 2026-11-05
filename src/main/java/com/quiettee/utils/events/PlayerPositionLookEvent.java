@@ -1,22 +1,22 @@
 package com.quiettee.utils.events;
 
-import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 
 public abstract class PlayerPositionLookEvent {
-    public final PlayerPositionLookS2CPacket packet;
+    public final ClientboundPlayerPositionPacket packet;
 
-    private PlayerPositionLookEvent(PlayerPositionLookS2CPacket packet) {
+    private PlayerPositionLookEvent(ClientboundPlayerPositionPacket packet) {
         this.packet = packet;
     }
 
     public static final class Before extends PlayerPositionLookEvent {
-        public Before(PlayerPositionLookS2CPacket packet) {
+        public Before(ClientboundPlayerPositionPacket packet) {
             super(packet);
         }
     }
 
     public static final class After extends PlayerPositionLookEvent {
-        public After(PlayerPositionLookS2CPacket packet) {
+        public After(ClientboundPlayerPositionPacket packet) {
             super(packet);
         }
     }

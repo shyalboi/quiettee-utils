@@ -31,51 +31,50 @@ import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.AttackRangeComponent;
-import net.minecraft.component.type.KineticWeaponComponent;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.PositionInterpolator;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.data.DataTracker;
-import net.minecraft.entity.decoration.EndCrystalEntity;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.network.ClientConnection;
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
-import net.minecraft.network.packet.c2s.play.HandSwingC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerActionC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerInteractBlockC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerInteractItemC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
-import net.minecraft.network.packet.s2c.play.BlockUpdateS2CPacket;
-import net.minecraft.network.packet.s2c.play.ChunkDeltaUpdateS2CPacket;
-import net.minecraft.network.packet.s2c.play.EntityTrackerUpdateS2CPacket;
-import net.minecraft.registry.tag.ItemTags;
-import net.minecraft.util.ActionResult;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.util.shape.VoxelShape;
-import net.minecraft.world.RaycastContext;
-
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
+import net.minecraft.network.protocol.game.ServerboundSwingPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.tags.ItemTags;
+import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.InterpolationHandler;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.AttackRange;
+import net.minecraft.world.item.component.KineticWeapon;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.VoxelShape;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -342,11 +341,11 @@ public class Lance extends Module {
     );
 
     private double ox, oy, oz;
-    private Vec3d lastClaim;
-    private Vec3d returnClaim;
+    private Vec3 lastClaim;
+    private Vec3 returnClaim;
     private boolean protectMovementThisTick;
     private int protectedWireTick = -1000;
-    private Vec3d lastWire;
+    private Vec3 lastWire;
     private int lastWireTick = -1000;
     private boolean wireSyncWanted;
     private int claimsSinceSetback;
@@ -356,13 +355,13 @@ public class Lance extends Module {
     private final LanceBeatTiming beat = new LanceBeatTiming();
     private final LanceApproachPriority approachPriority = new LanceApproachPriority();
     private LanceAttackMath.Lane attackLane;
-    private Vec3d strikeAxis = new Vec3d(0, -1, 0);
+    private Vec3 strikeAxis = new Vec3(0, -1, 0);
     private final List<LanceCrystalSafety.Point> crystalPositions = new ArrayList<>();
     private final List<LanceCrystalSafety.Point> potentialCrystalPositions = new ArrayList<>();
     private final Map<LanceAttackMath.Lane, Double> laneDamageCache = new HashMap<>();
     private final Map<LanceAttackMath.Lane, Double> potentialLaneDamageCache = new HashMap<>();
     private int crystalPlacers;
-    private final Map<Vec3d, Double> crystalDamageCache = new HashMap<>();
+    private final Map<Vec3, Double> crystalDamageCache = new HashMap<>();
     private ExplosionReductions crystalReductions;
     private double plannedCrystalDamage;
     private int crystalRefreshTick = Integer.MIN_VALUE;
@@ -377,11 +376,11 @@ public class Lance extends Module {
     private int tickCounter;
     private boolean correcting;
     private boolean leavingWorld;
-    private ClientPlayerEntity ownerPlayer;
-    private ClientWorld ownerWorld;
-    private ClientPlayNetworkHandler ownerNetwork;
+    private LocalPlayer ownerPlayer;
+    private ClientLevel ownerWorld;
+    private ClientPacketListener ownerNetwork;
 
-    private record EchoOwner(ClientConnection connection, int playerId) {}
+    private record EchoOwner(Connection connection, int playerId) {}
     private volatile EchoOwner echoOwner;
     private record GlideEcho(EchoOwner owner, boolean gliding) {}
     private final ConcurrentLinkedQueue<GlideEcho> glideEchoes = new ConcurrentLinkedQueue<>();
@@ -413,9 +412,9 @@ public class Lance extends Module {
     private int lastWebVolleyTick = -1000;
     private String volleyReason = "continuation";
     private Tier weavingTier;
-    private AttackRangeComponent weavingRange;
+    private AttackRange weavingRange;
     private int weavingSlot = -1, weavingOriginalSlot = -1, weavingStartedAt, weavingAttempts;
-    private Vec3d shellCenter;
+    private Vec3 shellCenter;
     private boolean shellAttempted;
     private record WebPlacement(BlockPos pos, BlockHitResult hit) {}
     private WebPlacement sendingWeb;
@@ -426,15 +425,15 @@ public class Lance extends Module {
     private volatile Set<BlockPos> pendingWebSnapshot = Set.of();
     private final ConcurrentLinkedQueue<WebEcho> webEchoes = new ConcurrentLinkedQueue<>();
 
-    private record WireFootprint(int tick, Box swept) {}
+    private record WireFootprint(int tick, AABB swept) {}
     private final ArrayDeque<WireFootprint> recentWire = new ArrayDeque<>();
-    private Vec3d avoidanceWaypoint;
-    private Vec3d avoidanceRise;
+    private Vec3 avoidanceWaypoint;
+    private Vec3 avoidanceRise;
     private int avoidanceUntil;
     private volatile BlockPos clearingWeb;
     private boolean clearingConfirmed, selfWebHold, manualWebControl;
     private int clearingSlot = -1, clearingOriginalSlot = -1, selfWebPauseUntil, clearingStartedAt;
-    private Vec3d correctionFrom;
+    private Vec3 correctionFrom;
 
     private String status = "idle";
     private double parkX, parkY, parkZ;
@@ -443,10 +442,10 @@ public class Lance extends Module {
     private final ArrayDeque<String> trace = new ArrayDeque<>();
     private final ArrayDeque<String> wireTrace = new ArrayDeque<>();
 
-    private final Vec3d[] hist = new Vec3d[8];
+    private final Vec3[] hist = new Vec3[8];
     private int histLen, histIdx;
     private Entity histTarget;
-    private Vec3d vPos = Vec3d.ZERO, vVel = Vec3d.ZERO;
+    private Vec3 vPos = Vec3.ZERO, vVel = Vec3.ZERO;
 
     private int telTicks, telStrikes, telHurts, telPlausibleHurts, telWebs, telWebConfirmed;
     private double telDmg, telPredicted;
@@ -518,7 +517,7 @@ public class Lance extends Module {
         couchTiming.reset();
         clearPostWebRetry();
         couchGeneration = couchTiming.stop();
-        srvGliding = mc.player == null ? null : mc.player.isGliding();
+        srvGliding = mc.player == null ? null : mc.player.isFallFlying();
         glideRecovery = recoveryJumped = false;
         recoveryVy = 0;
         recoveryJumpTick = -1000;
@@ -565,14 +564,14 @@ public class Lance extends Module {
 
     private void bindCurrentBody() {
         ownerPlayer = mc.player;
-        ownerWorld = mc.world;
-        ownerNetwork = mc.getNetworkHandler();
+        ownerWorld = mc.level;
+        ownerNetwork = mc.getConnection();
         echoOwner = ownerPlayer == null || ownerNetwork == null ? null : new EchoOwner(ownerNetwork.getConnection(), ownerPlayer.getId());
     }
 
     private boolean ownsCurrentBody() {
-        return mc.player != null && mc.world != null && mc.getNetworkHandler() != null
-            && mc.player == ownerPlayer && mc.world == ownerWorld && mc.getNetworkHandler() == ownerNetwork;
+        return mc.player != null && mc.level != null && mc.getConnection() != null
+            && mc.player == ownerPlayer && mc.level == ownerWorld && mc.getConnection() == ownerNetwork;
     }
 
     private void clearPositionState() {
@@ -608,7 +607,7 @@ public class Lance extends Module {
 
     @EventHandler
     private void onTickPre(TickEvent.Pre event) {
-        if (mc.player == null || mc.world == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.level == null || mc.getConnection() == null) return;
         if (!ownsCurrentBody()) onActivate();
         posSentThisTick = false;
         protectMovementThisTick = false;
@@ -619,24 +618,24 @@ public class Lance extends Module {
         drainUseEchoes();
         drainWebEchoes();
         if (weavingTier != null && mc.player.getInventory().getSelectedSlot() == weavingSlot
-            && mc.player.getMainHandStack().isOf(Items.COBWEB) && mc.player.isUsingItem()
-            && mc.player.getActiveItem().isOf(Items.COBWEB) && !mc.options.useKey.isPressed() && !mc.options.attackKey.isPressed()) {
+            && mc.player.getMainHandItem().is(Items.COBWEB) && mc.player.isUsingItem()
+            && mc.player.getUseItem().is(Items.COBWEB) && !mc.options.keyUse.isDown() && !mc.options.keyAttack.isDown()) {
 
-            mc.player.clearActiveItem();
+            mc.player.stopUsingItem();
             dbg("WEBS cleared stale local cobweb-use mirror");
         }
         if (weavingTier != null && (!webEnabled.get() || target == null || cooldown > 0
-            || mc.player.getInventory().getSelectedSlot() != weavingSlot || !mc.player.getMainHandStack().isOf(Items.COBWEB)
-            || mc.options.attackKey.isPressed() || mc.player.isUsingItem()
-            || hasWeb(bodyAt(lastWire != null ? lastWire : mc.player.getEntityPos())))) finishWeave(true);
+            || mc.player.getInventory().getSelectedSlot() != weavingSlot || !mc.player.getMainHandItem().is(Items.COBWEB)
+            || mc.options.keyAttack.isDown() || mc.player.isUsingItem()
+            || hasWeb(bodyAt(lastWire != null ? lastWire : mc.player.position())))) finishWeave(true);
         recentWire.removeIf(entry -> tickCounter - entry.tick > wireProtectionTicks());
         selfWebHold = selfWebTick();
         if (selfWebHold || manualWebControl) { finishWeave(true); clearPostWebRetry(); }
         prepareGlideRecovery();
         relightTick();
 
-        if (!selfWebHold && !manualWebControl && follow.get() && target != null && usableElytra() && !mc.player.isOnGround() && !mc.player.isTouchingWater() && !mc.player.isGliding()) {
-            mc.player.startGliding();
+        if (!selfWebHold && !manualWebControl && follow.get() && target != null && usableElytra() && !mc.player.onGround() && !mc.player.isInWater() && !mc.player.isFallFlying()) {
+            mc.player.startFallFlying();
             if (srvGliding == Boolean.FALSE) beginGlideRecovery();
         }
 
@@ -654,14 +653,14 @@ public class Lance extends Module {
         }
 
         if (target != null) {
-            PositionInterpolator pi = target.getInterpolator();
-            vPos = pi != null ? pi.getLerpedPos() : target.getEntityPos();
+            InterpolationHandler pi = target.getInterpolation();
+            vPos = pi != null ? pi.position() : target.position();
             if (target != histTarget) { histLen = 0; histIdx = 0; histTarget = target; }
             hist[histIdx] = vPos;
             histIdx = (histIdx + 1) & 7;
             if (histLen < 8) histLen++;
-            if (histLen >= 5) vVel = hist[(histIdx - 1) & 7].subtract(hist[(histIdx - 5) & 7]).multiply(0.25);
-            else vVel = Vec3d.ZERO;
+            if (histLen >= 5) vVel = hist[(histIdx - 1) & 7].subtract(hist[(histIdx - 5) & 7]).scale(0.25);
+            else vVel = Vec3.ZERO;
         }
 
         if (target instanceof LivingEntity lv) {
@@ -672,7 +671,7 @@ public class Lance extends Module {
                 if (plausible) telPlausibleHurts++;
                 dbg("OBSERVED-HURT hurt %d->%d hp %.1f->%.1f plausibleStrikeWindow=%b cyc=%d trace=%s", lastHurt, lv.hurtTime, lastHp, hpNow, plausible, cycleTick, String.join(" | ", trace));
             }
-            if (!(lv instanceof PlayerEntity) && hpNow < lastHp) telDmg += lastHp - hpNow;
+            if (!(lv instanceof Player) && hpNow < lastHp) telDmg += lastHp - hpNow;
             lastHurt = lv.hurtTime;
             lastHp = hpNow;
         }
@@ -687,11 +686,11 @@ public class Lance extends Module {
     }
 
     private void couchTick() {
-        boolean usingOther = mc.player.isUsingItem() && tier(mc.player.getActiveItem().getItem()) == null;
+        boolean usingOther = mc.player.isUsingItem() && tier(mc.player.getUseItem().getItem()) == null;
         Tier tier = heldTier();
         if (postWebSpearSlot >= 0 && (!ownsCurrentBody() || correcting || cooldown > 0 || target != postWebRetryTarget
             || mc.player.getInventory().getSelectedSlot() != postWebSpearSlot || tier == null || usingOther
-            || mc.options.attackKey.isPressed())) clearPostWebRetry();
+            || mc.options.keyAttack.isDown())) clearPostWebRetry();
         if (srvCouch >= 0) srvCouch++;
         if (usingOther) {
             pressedUse = false;
@@ -703,7 +702,7 @@ public class Lance extends Module {
             if (pressedUse) setUseKey(false);
             srvCouch = -1;
             couchGeneration = couchTiming.stop();
-            if (autoSwap.get() && target != null && (mc.player.getMainHandStack().isEmpty() || ++userItemTicks >= 15)) {
+            if (autoSwap.get() && target != null && (mc.player.getMainHandItem().isEmpty() || ++userItemTicks >= 15)) {
                 int slot = bestSpearSlot();
                 if (slot != -1) { InvUtils.swap(slot, false); tier = heldTier(); userItemTicks = 0; }
             }
@@ -731,7 +730,7 @@ public class Lance extends Module {
                     reassertCouch();
                 } else if (!mc.player.isUsingItem()) {
 
-                    mc.player.setCurrentHand(Hand.MAIN_HAND);
+                    mc.player.startUsingItem(InteractionHand.MAIN_HAND);
                 }
             }
         }
@@ -740,14 +739,14 @@ public class Lance extends Module {
     private void followTick() {
         fActive = fVerticalActive = false;
         if (selfWebHold || manualWebControl) return;
-        if (!follow.get() || target == null || !mc.player.isGliding()) return;
+        if (!follow.get() || target == null || !mc.player.isFallFlying()) return;
         double lead = Math.min(5.0, PlayerUtils.getPing() / 50.0);
         parkX = vPos.x + vVel.x * lead;
         parkZ = vPos.z + vVel.z * lead;
         parkY = vPos.y + hoverHeight.get();
         boolean horizontalPerch = attackLane != null && attackLane.horizontal();
         if (horizontalPerch) {
-            Vec3d perch = safeHorizontalPerch(new Vec3d(parkX, parkY, parkZ));
+            Vec3 perch = safeHorizontalPerch(new Vec3(parkX, parkY, parkZ));
             parkX = perch.x; parkY = perch.y; parkZ = perch.z;
         }
         double dx = parkX - mc.player.getX(), dz = parkZ - mc.player.getZ();
@@ -763,11 +762,11 @@ public class Lance extends Module {
         double dy = parkY - mc.player.getY();
         if (horizontalPerch || Math.abs(dy) > 1.0) {
 
-            fVy = MathHelper.clamp(dy, -MAX_V, MAX_V);
+            fVy = Mth.clamp(dy, -MAX_V, MAX_V);
             fVerticalActive = true;
         }
 
-        if (cooldown > 0) { fVx *= 0.5; fVz *= 0.5; fVy = MathHelper.clamp(fVy, -0.8, 0.8); }
+        if (cooldown > 0) { fVx *= 0.5; fVz *= 0.5; fVy = Mth.clamp(fVy, -0.8, 0.8); }
 
         if (Math.abs(fVy) > 0.4) {
             double budgetH = Math.sqrt(Math.max(0, MAX_H * MAX_H - fVy * fVy));
@@ -776,47 +775,47 @@ public class Lance extends Module {
         }
         if (horizontalPerch) {
 
-            Vec3d real = mc.player.getEntityPos();
-            Vec3d safeStep = sweepMove(real, real, new Vec3d(fVx, fVy, fVz));
+            Vec3 real = mc.player.position();
+            Vec3 safeStep = sweepMove(real, real, new Vec3(fVx, fVy, fVz));
             fVx = safeStep.x; fVy = safeStep.y; fVz = safeStep.z;
         }
 
     }
 
-    private Vec3d safeHorizontalPerch(Vec3d overhead) {
-        Vec3d real = mc.player.getEntityPos();
-        Vec3d ghost = lastWire != null ? lastWire : real;
+    private Vec3 safeHorizontalPerch(Vec3 overhead) {
+        Vec3 real = mc.player.position();
+        Vec3 ghost = lastWire != null ? lastWire : real;
         double leash = maxOffset.get() * 0.95;
         if (clearRealPerch(real, ghost, overhead, leash)) return overhead;
 
-        Vec3d rest = vec(attackLane.rest()), axis = vec(attackLane.axis());
-        Vec3d preferred = rest.subtract(axis.multiply(8)).add(0, 0.5, 0);
-        Vec3d best = null;
+        Vec3 rest = vec(attackLane.rest()), axis = vec(attackLane.axis());
+        Vec3 preferred = rest.subtract(axis.scale(8)).add(0, 0.5, 0);
+        Vec3 best = null;
         double bestScore = Double.POSITIVE_INFINITY;
         for (double retreat : new double[] {8, 4, 2, 0}) {
             for (double lift : new double[] {0.15, 0.5, 1, 2}) {
-                Vec3d candidate = rest.subtract(axis.multiply(retreat)).add(0, lift, 0);
+                Vec3 candidate = rest.subtract(axis.scale(retreat)).add(0, lift, 0);
                 if (!clearRealPerch(real, ghost, candidate, leash)) continue;
-                Box clearance = bodyAt(candidate).expand(0.08);
-                boolean room = mc.world.isSpaceEmpty(mc.player, clearance) && !hasWeb(clearance);
+                AABB clearance = bodyAt(candidate).inflate(0.08);
+                boolean room = mc.level.noCollision(mc.player, clearance) && !hasWeb(clearance);
                 double score = candidate.distanceTo(preferred) + candidate.distanceTo(real) * 0.25 + (room ? 0 : 2);
                 if (score < bestScore) { best = candidate; bestScore = score; }
             }
         }
         if (best != null) return best;
 
-        Vec3d up = real.add(0, 0.1, 0);
-        if (mc.player.isOnGround() && clearRealPerch(real, ghost, up, leash)) return up;
+        Vec3 up = real.add(0, 0.1, 0);
+        if (mc.player.onGround() && clearRealPerch(real, ghost, up, leash)) return up;
         return real;
     }
 
-    private boolean clearRealPerch(Vec3d real, Vec3d ghost, Vec3d perch, double leash) {
-        if (perch.squaredDistanceTo(ghost) > leash * leash
-            || !mc.world.getChunkManager().isChunkLoaded(MathHelper.floor(perch.x) >> 4, MathHelper.floor(perch.z) >> 4)) return false;
-        Box body = bodyAt(perch);
-        if (!mc.world.isSpaceEmpty(mc.player, body) || hasWeb(body)) return false;
-        Vec3d delta = perch.subtract(real);
-        return sweepMove(real, real, delta).squaredDistanceTo(delta) < 1e-8;
+    private boolean clearRealPerch(Vec3 real, Vec3 ghost, Vec3 perch, double leash) {
+        if (perch.distanceToSqr(ghost) > leash * leash
+            || !mc.level.getChunkSource().hasChunk(Mth.floor(perch.x) >> 4, Mth.floor(perch.z) >> 4)) return false;
+        AABB body = bodyAt(perch);
+        if (!mc.level.noCollision(mc.player, body) || hasWeb(body)) return false;
+        Vec3 delta = perch.subtract(real);
+        return sweepMove(real, real, delta).distanceToSqr(delta) < 1e-8;
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
@@ -825,30 +824,30 @@ public class Lance extends Module {
         if (manualWebControl) return;
         if (selfWebHold) {
 
-            mc.player.setVelocity(Vec3d.ZERO);
+            mc.player.setDeltaMovement(Vec3.ZERO);
             ((IVec3d) event.movement).meteor$set(0, 0, 0);
             return;
         }
-        if (srvGliding == Boolean.FALSE && mc.player.isGliding() && !glideRecovery) beginGlideRecovery();
+        if (srvGliding == Boolean.FALSE && mc.player.isFallFlying() && !glideRecovery) beginGlideRecovery();
         boolean recovering = glideRecovery && srvGliding == Boolean.FALSE;
-        if (!recovering && (!fActive || !mc.player.isGliding())) return;
+        if (!recovering && (!fActive || !mc.player.isFallFlying())) return;
         double vx = fActive ? fVx : event.movement.x, vz = fActive ? fVz : event.movement.z;
         double vy = fActive && fVerticalActive ? fVy : event.movement.y;
-        if (recovering && !mc.player.hasVehicle() && !mc.player.isTouchingWater() && !mc.player.isInLava()
-            && !mc.player.hasStatusEffect(StatusEffects.LEVITATION)) {
+        if (recovering && !mc.player.isPassenger() && !mc.player.isInWater() && !mc.player.isInLava()
+            && !mc.player.hasEffect(MobEffects.LEVITATION)) {
 
             if (recoveryJumpTick != tickCounter) {
-                double gravity = mc.player.getAttributeValue(EntityAttributes.GRAVITY);
-                if (recoveryVy <= 0 && mc.player.hasStatusEffect(StatusEffects.SLOW_FALLING)) gravity = Math.min(gravity, 0.01);
-                recoveryVy = mc.player.isOnGround() ? 0 : LanceMovementMath.nextRecoveryVelocity(recoveryVy, gravity);
+                double gravity = mc.player.getAttributeValue(Attributes.GRAVITY);
+                if (recoveryVy <= 0 && mc.player.hasEffect(MobEffects.SLOW_FALLING)) gravity = Math.min(gravity, 0.01);
+                recoveryVy = mc.player.onGround() ? 0 : LanceMovementMath.nextRecoveryVelocity(recoveryVy, gravity);
             }
             vy = recoveryVy;
             double scale = LanceMovementMath.capScale(vx, 0, vz, 0.25, 1);
             vx *= scale; vz *= scale;
-            mc.player.setVelocity(vx, vy, vz);
+            mc.player.setDeltaMovement(vx, vy, vz);
         }
         if (lastClaim != null) {
-            Vec3d rel = mc.player.getEntityPos().subtract(lastClaim);
+            Vec3 rel = mc.player.position().subtract(lastClaim);
             double leash = maxOffset.get() * 0.95;
 
             if (blockedTicks > 0 || homeBlocked > 0) leash = Math.min(leash, rel.length());
@@ -856,15 +855,15 @@ public class Lance extends Module {
             vx *= fraction; vy *= fraction; vz *= fraction;
         }
         int cx = (int) Math.floor((mc.player.getX() + vx) / 16), cz = (int) Math.floor((mc.player.getZ() + vz) / 16);
-        if (!mc.world.getChunkManager().isChunkLoaded(cx, cz)) { vx = 0; vz = 0; }
-        Vec3d movement = new Vec3d(vx, vy, vz);
+        if (!mc.level.getChunkSource().hasChunk(cx, cz)) { vx = 0; vz = 0; }
+        Vec3 movement = new Vec3(vx, vy, vz);
         if (fActive && lastClaim == null) {
             refreshCrystalSafety();
-            Vec3d real = mc.player.getEntityPos();
+            Vec3 real = mc.player.position();
             if (!recovering) movement = protectCrystalMove(real, real, movement, maxOffset.get() * 0.95);
             else if (!damageAllowed(segmentDamage(real, real.add(movement)))) {
 
-                Vec3d falling = new Vec3d(0, movement.y, 0);
+                Vec3 falling = new Vec3(0, movement.y, 0);
                 if (positionDamage(real.add(falling)) < positionDamage(real.add(movement))) movement = falling;
             }
             wireSyncWanted = true;
@@ -872,15 +871,15 @@ public class Lance extends Module {
 
         if (fActive && !hasWeb(mc.player.getBoundingBox())) {
             double fraction = webSafeFraction(mc.player.getBoundingBox(), movement);
-            movement = movement.multiply(fraction);
+            movement = movement.scale(fraction);
         }
         ((IVec3d) event.movement).meteor$set(movement.x, movement.y, movement.z);
     }
 
     private boolean usableElytra() {
-        if (mc.player == null || mc.player.hasVehicle() || mc.player.getAbilities().flying || mc.player.hasStatusEffect(StatusEffects.LEVITATION)) return false;
-        ItemStack chest = mc.player.getEquippedStack(EquipmentSlot.CHEST);
-        return chest.contains(DataComponentTypes.GLIDER) && (!chest.isDamageable() || chest.getDamage() < chest.getMaxDamage() - 1);
+        if (mc.player == null || mc.player.isPassenger() || mc.player.getAbilities().flying || mc.player.hasEffect(MobEffects.LEVITATION)) return false;
+        ItemStack chest = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        return chest.has(DataComponents.GLIDER) && (!chest.isDamageableItem() || chest.getDamageValue() < chest.getMaxDamage() - 1);
     }
 
     private void beginGlideRecovery() {
@@ -888,22 +887,22 @@ public class Lance extends Module {
         glideRecovery = true;
         recoveryJumped = false;
         recoveryJumpTick = -1000;
-        recoveryVy = Math.min(0, mc.player.getVelocity().y);
+        recoveryVy = Math.min(0, mc.player.getDeltaMovement().y);
     }
 
     private void prepareGlideRecovery() {
         if (!ownsCurrentBody() || correcting || selfWebHold || manualWebControl) return;
         if (srvGliding != Boolean.FALSE) return;
-        if (mc.player.isGliding() && !glideRecovery) beginGlideRecovery();
+        if (mc.player.isFallFlying() && !glideRecovery) beginGlideRecovery();
         if (lastClaim != null) {
             beginGlideRecovery();
             adoptGhost("server closed the wings");
             recoveryVy = 0;
         }
         if (!glideRecovery || !follow.get() || target == null || recoveryJumped || !usableElytra()
-            || !mc.player.isOnGround() || mc.player.isTouchingWater() || mc.player.isInLava()) return;
-        mc.player.jump();
-        recoveryVy = mc.player.getVelocity().y;
+            || !mc.player.onGround() || mc.player.isInWater() || mc.player.isInLava()) return;
+        mc.player.jumpFromGround();
+        recoveryVy = mc.player.getDeltaMovement().y;
         recoveryJumpTick = tickCounter;
         recoveryJumped = true;
         dbg("recovery ground jump vy=%.3f; waiting for ElytraFly glide echo", recoveryVy);
@@ -929,8 +928,8 @@ public class Lance extends Module {
             relightPending--;
             return;
         }
-        if (FORK_SYNC || !ownsCurrentBody() || correcting || srvGliding != Boolean.FALSE || !mc.player.isGliding()) return;
-        if (mc.player.isOnGround() || mc.player.isTouchingWater() || !usableElytra()) return;
+        if (FORK_SYNC || !ownsCurrentBody() || correcting || srvGliding != Boolean.FALSE || !mc.player.isFallFlying()) return;
+        if (mc.player.onGround() || mc.player.isInWater() || !usableElytra()) return;
         relightArmed = true;
         ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
     }
@@ -938,8 +937,8 @@ public class Lance extends Module {
     private void relightPost() {
         if (!relightArmed) return;
         relightArmed = false;
-        if (!relightAirborneMove || mc.getNetworkHandler() == null) return;
-        mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+        if (!relightAirborneMove || mc.getConnection() == null) return;
+        mc.getConnection().send(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
         relightPending = relightWait();
         relights++;
         dbg("RELIGHT #%d glide command sent behind the airborne packet", relights);
@@ -947,10 +946,10 @@ public class Lance extends Module {
 
     private void adoptGhost(String reason) {
         if (!ownsCurrentBody() || lastClaim == null || correcting) return;
-        Vec3d adopted = lastWire != null ? lastWire : lastClaim;
-        dbg("ADOPT ghost (%s) delta=%.2f", reason, adopted.distanceTo(mc.player.getEntityPos()));
-        mc.player.setPosition(adopted);
-        mc.player.setVelocity(Vec3d.ZERO);
+        Vec3 adopted = lastWire != null ? lastWire : lastClaim;
+        dbg("ADOPT ghost (%s) delta=%.2f", reason, adopted.distanceTo(mc.player.position()));
+        mc.player.setPos(adopted);
+        mc.player.setDeltaMovement(Vec3.ZERO);
         ox = oy = oz = 0;
         lastClaim = null;
         lastWire = adopted;
@@ -984,7 +983,7 @@ public class Lance extends Module {
         if (srvGliding == Boolean.FALSE) {
             finishWeave(true);
             prepareGlideRecovery();
-            status = !glideRecovery && !mc.player.isGliding() ? "not gliding - hover on the elytra"
+            status = !glideRecovery && !mc.player.isFallFlying() ? "not gliding - hover on the elytra"
                 : FORK_SYNC ? "server dropped the wings - waiting for ElytraFly to re-open them" : "server dropped the wings - re-opening them";
             return;
         }
@@ -996,27 +995,27 @@ public class Lance extends Module {
             walkHome();
             return;
         }
-        if (!mc.player.isGliding()) {
+        if (!mc.player.isFallFlying()) {
             finishWeave(true);
             status = "not gliding - hover on the elytra";
             walkHome();
             return;
         }
-        Vec3d real = mc.player.getEntityPos();
+        Vec3 real = mc.player.position();
 
-        Vec3d cur;
+        Vec3 cur;
         if (lastClaim != null) cur = lastWire != null ? lastWire : lastClaim;
-        else if (lastWire != null && (tickCounter - lastWireTick <= 2 || lastWire.squaredDistanceTo(real) < 0.01)) cur = lastWire;
+        else if (lastWire != null && (tickCounter - lastWireTick <= 2 || lastWire.distanceToSqr(real) < 0.01)) cur = lastWire;
         else { ox = oy = oz = 0; wireSyncWanted = true; dbg("skip handoff-sync"); return; }
 
         double lead = couchTiming.predictionTicks(PlayerUtils.getPing());
-        Box b = target.getBoundingBox().offset(vPos.subtract(target.getEntityPos())).offset(vVel.multiply(lead));
+        AABB b = target.getBoundingBox().move(vPos.subtract(target.position())).move(vVel.scale(lead));
         double cx = (b.minX + b.maxX) * 0.5, cz = (b.minZ + b.maxZ) * 0.5, head = b.maxY;
-        AttackRangeComponent ar = weavingTier != null ? weavingRange : mc.player.getAttackRange();
-        double effMax = ar != null ? ar.getEffectiveMaxRange(mc.player) : 4.5;
-        double effMin = ar != null ? ar.getEffectiveMinRange(mc.player) : 2.0;
+        AttackRange ar = weavingTier != null ? weavingRange : mc.player.entityAttackRange();
+        double effMax = ar != null ? ar.effectiveMaxRange(mc.player) : 4.5;
+        double effMin = ar != null ? ar.effectiveMinRange(mc.player) : 2.0;
 
-        double strikeEye = MathHelper.clamp(strikeHeight.get(), effMin + 0.3, effMax - 0.3);
+        double strikeEye = Mth.clamp(strikeHeight.get(), effMin + 0.3, effMax - 0.3);
         double launchEye = strikeEye + dip.get();
         double restEye = Math.max(Math.max(standoff.get() + EYE, launchEye), effMax + RAY_MARGIN + 0.3);
         double launchY = head + launchEye - EYE, restY = head + restEye - EYE;
@@ -1024,8 +1023,8 @@ public class Lance extends Module {
         refreshCrystalSafety();
         LanceAttackMath.Lane lane = wasStrike && attackLane != null ? attackLane : chooseLane(b, cur, strikeEye, restEye);
         attackLane = lane;
-        Vec3d axis = wasStrike ? strikeAxis : vec(lane.axis());
-        Vec3d impact = vec(lane.impact()), launch = vec(lane.launch()), rest = vec(lane.rest());
+        Vec3 axis = wasStrike ? strikeAxis : vec(lane.axis());
+        Vec3 impact = vec(lane.impact()), launch = vec(lane.launch()), rest = vec(lane.rest());
         launchY = launch.y; restY = rest.y;
         approachTicks = (int) Math.ceil(rest.distanceTo(launch) / 1.2);
         int remaining = beat.remaining(tickCounter, period.get());
@@ -1040,28 +1039,28 @@ public class Lance extends Module {
         webbedNow = victimWebbed(target);
         boolean covered = currentWebCoverage();
         boolean needsWeb = needsWebMaintenance(covered);
-        boolean canWeb = webEnabled.get() && (!webPlayersOnly.get() || target instanceof PlayerEntity)
+        boolean canWeb = webEnabled.get() && (!webPlayersOnly.get() || target instanceof Player)
             && InvUtils.findInHotbar(Items.COBWEB).isHotbar();
         plannedCrystalDamage = laneDamage(lane);
-        Vec3d threat = damageAllowed(plannedCrystalDamage) ? null : impact;
-        boolean capture = canWeb && !covered && vVel.lengthSquared() > 0.04
+        Vec3 threat = damageAllowed(plannedCrystalDamage) ? null : impact;
+        boolean capture = canWeb && !covered && vVel.lengthSqr() > 0.04
             && tickCounter - lastWebVolleyTick >= armTicks + period.get();
 
         if (capture && couched && !hasUsefulWeb(covered)) capture = false;
         if (couched && approachPriority.active(tickCounter)) capture = false;
 
-        Vec3d want;
+        Vec3 want;
         double capH = MAX_H, capV = MAX_V;
         boolean strike = false, aimIn = false;
         String kind;
         if (wasStrike) {
 
-            want = cur.add(axis.multiply(0.3));
+            want = cur.add(axis.scale(0.3));
             capV = lane.horizontal() ? MAX_V : 0.35; aimIn = true; kind = "cont";
             volleyWanted = canWeb && needsWeb;
             volleyReason = covered ? "containment / escape edge" : "continuation";
         } else if (weavingTier != null) {
-            want = impact.add(axis.multiply(0.3)); kind = "weave";
+            want = impact.add(axis.scale(0.3)); kind = "weave";
         } else if (couched && remaining == 0 && atLaunch && threat == null && attackRayClear(lane)) {
             want = impact;
             capV = lane.horizontal() ? MAX_V : dip.get() + 0.05; aimIn = true; strike = true; kind = "STRIKE";
@@ -1076,31 +1075,31 @@ public class Lance extends Module {
         }
 
         boolean attackMove = strike || wasStrike;
-        Vec3d d = want.subtract(cur);
+        Vec3 d = want.subtract(cur);
         d = !attackMove && ("capture".equals(kind) || "weave".equals(kind) || "launch".equals(kind) || "approach".equals(kind))
             ? approachMove(d, capH, capV) : capMove(d, capH, capV);
         double leash = maxOffset.get() * 0.95;
-        Vec3d nextWant = cur.add(d);
+        Vec3 nextWant = cur.add(d);
         if (nextWant.subtract(real).length() > leash) {
-            Vec3d rel = nextWant.subtract(real);
-            d = real.add(rel.multiply(leash / rel.length())).subtract(cur);
+            Vec3 rel = nextWant.subtract(real);
+            d = real.add(rel.scale(leash / rel.length())).subtract(cur);
             if (strike) { strike = false; aimIn = false; kind = "leash"; }
         }
         d = capMove(d, capH, capV);
-        Vec3d requestedStep = d;
+        Vec3 requestedStep = d;
         double planned = d.length();
         d = sweepMove(real, cur, d);
-        if (strike && (cur.add(d).distanceTo(impact) > 0.06 || d.dotProduct(axis) < 0.3 || !kineticDamageReady(d, axis))) {
-            strike = aimIn = false; kind = "blocked"; d = Vec3d.ZERO;
+        if (strike && (cur.add(d).distanceTo(impact) > 0.06 || d.dot(axis) < 0.3 || !kineticDamageReady(d, axis))) {
+            strike = aimIn = false; kind = "blocked"; d = Vec3.ZERO;
         }
         if (!LancePathSafety.allowDetour(attackMove, want.y - cur.y)) avoidanceWaypoint = avoidanceRise = null;
         else if (avoidanceWaypoint != null || d.length() < planned * 0.9) {
             double routeCapV = Math.min(capV, MAX_V);
-            Vec3d routed = routeAroundWeb(real, cur, want, capH, routeCapV);
+            Vec3 routed = routeAroundWeb(real, cur, want, capH, routeCapV);
             if (routed != null) {
-                Vec3d rel = cur.subtract(real);
+                Vec3 rel = cur.subtract(real);
                 double fraction = LanceMovementMath.followFraction(rel.x, rel.y, rel.z, routed.x, routed.y, routed.z, leash);
-                d = sweepMove(real, cur, capMove(routed.multiply(fraction), capH, routeCapV));
+                d = sweepMove(real, cur, capMove(routed.scale(fraction), capH, routeCapV));
                 kind = "web-detour";
             }
         }
@@ -1120,8 +1119,8 @@ public class Lance extends Module {
         if (blockedTicks > 0 && tickCounter % 20 == 0) dbg("PATH-HOLD web=%b terrain=%b crystal=%b routeDamage=%.3f limit=%.3f observed=%d possible=%d requested=%s accepted=%s body=%.2fx%.2f",
             webSafeFraction(bodyAt(cur), requestedStep) < 0.999, terrainBlocked, crystalBlocked, approachDamage, damageLimit(),
             crystalPositions.size(), potentialCrystalPositions.size(), requestedStep, d,
-            mc.player.getBoundingBox().getLengthX(), mc.player.getBoundingBox().getLengthY());
-        Vec3d next = cur.add(d);
+            mc.player.getBoundingBox().getXsize(), mc.player.getBoundingBox().getYsize());
+        Vec3 next = cur.add(d);
 
         trace.addLast(String.format("%s h%.1f v%+.1f @%.1f", kind, Math.sqrt(d.x * d.x + d.z * d.z), d.y, next.y));
         while (trace.size() > 8) trace.removeFirst();
@@ -1133,7 +1132,7 @@ public class Lance extends Module {
             strikeAxis = axis;
             telStrikes++;
             recordStrikeOnSend = true;
-            telPredicted = 1 + Math.floor(Math.max(0, d.subtract(vVel).dotProduct(axis)) * 20 * tier.mult());
+            telPredicted = 1 + Math.floor(Math.max(0, d.subtract(vVel).dot(axis)) * 20 * tier.mult());
             status = String.format("LANCE %s · %s STRIKE · ~%.0f raw · off %.1f", EntityUtils.getName(target), lane.horizontal() ? "horizontal" : "overhead", telPredicted, next.distanceTo(real));
             dbg("STRIKE step=%.2f/%.2f/%.2f pred=%.0f eye-head=%.2f dxz=%.2f srvUse=%b srvC=%d webbed=%b", d.x, d.y, d.z, telPredicted, next.y + EYE - head, dxz, srvUse, srvCouch, webbedNow);
         } else if (!couched) {
@@ -1159,8 +1158,8 @@ public class Lance extends Module {
                 lane.horizontal() ? MAX_V : dip.get() + 0.05,
                 delta -> attackPoint(approachMove(vec(delta), MAX_H, 1.2)),
                 (fromPoint, toPoint) -> {
-                    Vec3d from = vec(fromPoint), to = vec(toPoint), movement = to.subtract(from);
-                    return to.distanceTo(real) <= leash && sweepMove(real, from, movement).squaredDistanceTo(movement) <= 1e-6
+                    Vec3 from = vec(fromPoint), to = vec(toPoint), movement = to.subtract(from);
+                    return to.distanceTo(real) <= leash && sweepMove(real, from, movement).distanceToSqr(movement) <= 1e-6
                         && damageAllowed(segmentDamage(from, to));
                 }, this::attackRayClear);
             if (approachPriority.preserve(tickCounter, imminent)) {
@@ -1183,27 +1182,27 @@ public class Lance extends Module {
             if (!strike && (cycleTick >= period.get() || !couched)) dbg("HOLD %s freshOn=%b", status, couchTiming.confirmed());
         }
 
-        Vec3d look = aimIn ? axis : next.add(0, EYE, 0).subtract(b.getCenter()).normalize();
-        if (look.lengthSquared() < 0.5) look = axis.negate();
+        Vec3 look = aimIn ? axis : next.add(0, EYE, 0).subtract(b.getCenter()).normalize();
+        if (look.lengthSqr() < 0.5) look = axis.reverse();
         plannedYaw = (float) Math.toDegrees(Math.atan2(-look.x, look.z));
-        plannedPitch = (float) -Math.toDegrees(Math.asin(MathHelper.clamp(look.y, -1, 1)));
+        plannedPitch = (float) -Math.toDegrees(Math.asin(Mth.clamp(look.y, -1, 1)));
         plannedAimTick = tickCounter;
         protectMovementThisTick = true;
         Rotations.rotate(plannedYaw, plannedPitch, 100);
     }
 
-    private static Vec3d vec(LanceAttackMath.Point p) { return new Vec3d(p.x(), p.y(), p.z()); }
-    private static LanceAttackMath.Point attackPoint(Vec3d p) { return new LanceAttackMath.Point(p.x, p.y, p.z); }
+    private static Vec3 vec(LanceAttackMath.Point p) { return new Vec3(p.x(), p.y(), p.z()); }
+    private static LanceAttackMath.Point attackPoint(Vec3 p) { return new LanceAttackMath.Point(p.x, p.y, p.z); }
 
-    private boolean kineticDamageReady(Vec3d movement, Vec3d axis) {
-        KineticWeaponComponent kinetic = mc.player.getMainHandStack().get(DataComponentTypes.KINETIC_WEAPON);
+    private boolean kineticDamageReady(Vec3 movement, Vec3 axis) {
+        KineticWeapon kinetic = mc.player.getMainHandItem().get(DataComponents.KINETIC_WEAPON);
         if (kinetic == null || kinetic.damageConditions().isEmpty()) return false;
-        double forward = movement.dotProduct(axis) * 20;
-        double relative = Math.max(0, movement.subtract(vVel).dotProduct(axis) * 20);
-        return kinetic.damageConditions().get().isSatisfied(Math.max(0, srvCouch - kinetic.delayTicks()), forward, relative, 1.0);
+        double forward = movement.dot(axis) * 20;
+        double relative = Math.max(0, movement.subtract(vVel).dot(axis) * 20);
+        return kinetic.damageConditions().get().test(Math.max(0, srvCouch - kinetic.delayTicks()), forward, relative, 1.0);
     }
 
-    private LanceAttackMath.Lane chooseLane(Box b, Vec3d cur, double strikeGap, double restGap) {
+    private LanceAttackMath.Lane chooseLane(AABB b, Vec3 cur, double strikeGap, double restGap) {
         LanceAttackMath.Bounds targetBox = new LanceAttackMath.Bounds(b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
         LanceAttackMath.Lane vertical = LanceAttackMath.vertical(targetBox, strikeGap, dip.get(), restGap);
         double preferred = crystalPolicy.get() == CrystalPolicy.Distance ? 0 : maxCrystalDamage.get();
@@ -1224,8 +1223,8 @@ public class Lance extends Module {
         double verticalDamage = laneDamage(vertical);
         double possibleDamage = potentialLaneDamage(vertical);
         if (crystalPolicy.get() == CrystalPolicy.EstimatedDamage && (verticalDamage > preferred || possibleDamage > preferred)) {
-            AttackRangeComponent range = weavingTier != null ? weavingRange : mc.player.getAttackRange();
-            double outerGap = range != null ? range.getEffectiveMaxRange(mc.player) - 0.3 : strikeGap;
+            AttackRange range = weavingTier != null ? weavingRange : mc.player.entityAttackRange();
+            double outerGap = range != null ? range.effectiveMaxRange(mc.player) - 0.3 : strikeGap;
             if (outerGap > strikeGap + 0.05) {
                 candidates.add(LanceAttackMath.vertical(targetBox, outerGap, dip.get(), Math.max(restGap, outerGap + dip.get())));
             }
@@ -1241,14 +1240,14 @@ public class Lance extends Module {
         double bestScore = Double.POSITIVE_INFINITY;
         for (LanceAttackMath.Lane candidate : candidates) {
             if (!strikeCorridorClear(candidate)) continue;
-            Vec3d destination = vec(candidate.launch()), delta = destination.subtract(cur);
+            Vec3 destination = vec(candidate.launch()), delta = destination.subtract(cur);
             boolean approachClear = clearApproach(cur, candidate);
-            Vec3d firstStep = sweepMove(mc.player.getEntityPos(), cur, approachMove(delta, MAX_H, 1.2));
+            Vec3 firstStep = sweepMove(mc.player.position(), cur, approachMove(delta, MAX_H, 1.2));
 
             if (delta.length() > 0.3 && firstStep.length() < 0.05) continue;
             if (!damageAllowed(segmentDamage(cur, cur.add(firstStep)))) continue;
             boolean sameLane = attackLane != null && candidate.horizontal() == attackLane.horizontal()
-                && vec(candidate.axis()).dotProduct(vec(attackLane.axis())) > 0.99
+                && vec(candidate.axis()).dot(vec(attackLane.axis())) > 0.99
                 && Math.abs(vec(candidate.impact()).add(0, EYE, 0).distanceTo(vec(candidate.contact()))
                     - vec(attackLane.impact()).add(0, EYE, 0).distanceTo(vec(attackLane.contact()))) < 0.05;
             double score = LanceLanePolicy.score(laneDamage(candidate), potentialLaneDamage(candidate), delta.length(),
@@ -1259,7 +1258,7 @@ public class Lance extends Module {
         }
         if (best != null) {
             if (attackLane == null || best.horizontal() != attackLane.horizontal()
-                || vec(best.axis()).dotProduct(vec(attackLane.axis())) < 0.99) {
+                || vec(best.axis()).dot(vec(attackLane.axis())) < 0.99) {
                 dbg("LANE chosen horizontal=%b overheadClear=%b blocked=%d launch=%s axis=%s observed=%d possible=%d score=%.3f",
                     best.horizontal(), clear, blockedTicks, best.launch(), best.axis(), crystalPositions.size(), potentialCrystalPositions.size(), bestScore);
             }
@@ -1269,93 +1268,93 @@ public class Lance extends Module {
         return vertical;
     }
 
-    private boolean clearApproach(Vec3d cur, LanceAttackMath.Lane lane) {
-        Vec3d delta = vec(lane.launch()).subtract(cur);
-        return sweepMove(mc.player.getEntityPos(), cur, delta).squaredDistanceTo(delta) <= 1e-6;
+    private boolean clearApproach(Vec3 cur, LanceAttackMath.Lane lane) {
+        Vec3 delta = vec(lane.launch()).subtract(cur);
+        return sweepMove(mc.player.position(), cur, delta).distanceToSqr(delta) <= 1e-6;
     }
 
     private boolean strikeCorridorClear(LanceAttackMath.Lane lane) {
-        Vec3d launch = vec(lane.launch()), delta = vec(lane.impact()).subtract(launch);
-        return sweepMove(mc.player.getEntityPos(), launch, delta).squaredDistanceTo(delta) <= 1e-6 && attackRayClear(lane);
+        Vec3 launch = vec(lane.launch()), delta = vec(lane.impact()).subtract(launch);
+        return sweepMove(mc.player.position(), launch, delta).distanceToSqr(delta) <= 1e-6 && attackRayClear(lane);
     }
 
     private boolean laneClear(LanceAttackMath.Lane lane) {
-        Vec3d launch = vec(lane.launch()), impact = vec(lane.impact()), rest = vec(lane.rest()), axis = vec(lane.axis());
-        Vec3d continuation = impact.add(axis.multiply(0.3));
-        for (Vec3d[] segment : List.of(new Vec3d[] {rest, launch}, new Vec3d[] {launch, continuation})) {
-            Vec3d delta = segment[1].subtract(segment[0]);
-            if (sweepMove(mc.player.getEntityPos(), segment[0], delta).squaredDistanceTo(delta) > 1e-6) return false;
+        Vec3 launch = vec(lane.launch()), impact = vec(lane.impact()), rest = vec(lane.rest()), axis = vec(lane.axis());
+        Vec3 continuation = impact.add(axis.scale(0.3));
+        for (Vec3[] segment : List.of(new Vec3[] {rest, launch}, new Vec3[] {launch, continuation})) {
+            Vec3 delta = segment[1].subtract(segment[0]);
+            if (sweepMove(mc.player.position(), segment[0], delta).distanceToSqr(delta) > 1e-6) return false;
         }
         return attackRayClear(lane);
     }
 
     private boolean attackRayClear(LanceAttackMath.Lane lane) {
-        Vec3d eye = vec(lane.impact()).add(0, EYE, 0);
-        return mc.world.raycast(new RaycastContext(eye, vec(lane.contact()), RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE, mc.player)).getType() == HitResult.Type.MISS;
+        Vec3 eye = vec(lane.impact()).add(0, EYE, 0);
+        return mc.level.clip(new ClipContext(eye, vec(lane.contact()), ClipContext.Block.COLLIDER,
+            ClipContext.Fluid.NONE, mc.player)).getType() == HitResult.Type.MISS;
     }
 
-    private Vec3d sweepMove(Vec3d real, Vec3d cur, Vec3d d) {
-        Box body = bodyAt(cur);
-        Box broad = box(LancePathSafety.swept(bounds(body), d.x, d.y, d.z));
+    private Vec3 sweepMove(Vec3 real, Vec3 cur, Vec3 d) {
+        AABB body = bodyAt(cur);
+        AABB broad = box(LancePathSafety.swept(bounds(body), d.x, d.y, d.z));
         double fraction = LancePathSafety.safeFraction(bounds(body), d.x, d.y, d.z, pathObstacles(broad, true));
-        return d.multiply(fraction);
+        return d.scale(fraction);
     }
 
-    private static LancePathSafety.Bounds bounds(Box b) {
+    private static LancePathSafety.Bounds bounds(AABB b) {
         return new LancePathSafety.Bounds(b.minX, b.minY, b.minZ, b.maxX, b.maxY, b.maxZ);
     }
 
-    private static Box box(LancePathSafety.Bounds b) {
-        return new Box(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ());
+    private static AABB box(LancePathSafety.Bounds b) {
+        return new AABB(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ());
     }
 
-    private Box bodyAt(Vec3d feet) {
-        return mc.player.getBoundingBox().offset(feet.subtract(mc.player.getEntityPos()));
+    private AABB bodyAt(Vec3 feet) {
+        return mc.player.getBoundingBox().move(feet.subtract(mc.player.position()));
     }
 
-    private boolean hasWeb(Box b) {
-        for (BlockPos pos : BlockPos.iterate(MathHelper.floor(b.minX), MathHelper.floor(b.minY), MathHelper.floor(b.minZ),
-            MathHelper.floor(b.maxX), MathHelper.floor(b.maxY), MathHelper.floor(b.maxZ))) {
+    private boolean hasWeb(AABB b) {
+        for (BlockPos pos : BlockPos.betweenClosed(Mth.floor(b.minX), Mth.floor(b.minY), Mth.floor(b.minZ),
+            Mth.floor(b.maxX), Mth.floor(b.maxY), Mth.floor(b.maxZ))) {
             PendingWeb pending = pendingWebs.get(pos);
-            if ((mc.world.getBlockState(pos).isOf(Blocks.COBWEB) || pending != null && !pending.expired)
-                && b.intersects(new Box(pos))) return true;
+            if ((mc.level.getBlockState(pos).is(Blocks.COBWEB) || pending != null && !pending.expired)
+                && b.intersects(new AABB(pos))) return true;
         }
         return false;
     }
 
-    private double webSafeFraction(Box body, Vec3d d) {
-        Box broad = box(LancePathSafety.swept(bounds(body), d.x, d.y, d.z));
+    private double webSafeFraction(AABB body, Vec3 d) {
+        AABB broad = box(LancePathSafety.swept(bounds(body), d.x, d.y, d.z));
         return LancePathSafety.safeFraction(bounds(body), d.x, d.y, d.z, pathObstacles(broad, false));
     }
 
-    private List<LancePathSafety.Bounds> pathObstacles(Box broad, boolean solids) {
+    private List<LancePathSafety.Bounds> pathObstacles(AABB broad, boolean solids) {
         List<LancePathSafety.Bounds> obstacles = new ArrayList<>();
         if (solids) {
-            for (VoxelShape shape : mc.world.getBlockCollisions(mc.player, broad)) {
-                for (Box collision : shape.getBoundingBoxes()) obstacles.add(bounds(collision));
+            for (VoxelShape shape : mc.level.getBlockCollisions(mc.player, broad)) {
+                for (AABB collision : shape.toAabbs()) obstacles.add(bounds(collision));
             }
-            for (VoxelShape shape : mc.world.getEntityCollisions(mc.player, broad)) {
-                for (Box collision : shape.getBoundingBoxes()) obstacles.add(bounds(collision));
+            for (VoxelShape shape : mc.level.getEntityCollisions(mc.player, broad)) {
+                for (AABB collision : shape.toAabbs()) obstacles.add(bounds(collision));
             }
-            if (mc.world.getWorldBorder().canCollide(mc.player, broad)) {
-                for (Box collision : mc.world.getWorldBorder().asVoxelShape().getBoundingBoxes()) {
+            if (mc.level.getWorldBorder().isInsideCloseToBorder(mc.player, broad)) {
+                for (AABB collision : mc.level.getWorldBorder().getCollisionShape().toAabbs()) {
 
-                    if (collision.intersects(broad)) obstacles.add(bounds(collision.intersection(broad.expand(1))));
+                    if (collision.intersects(broad)) obstacles.add(bounds(collision.intersect(broad.inflate(1))));
                 }
             }
         }
-        for (BlockPos pos : BlockPos.iterate(MathHelper.floor(broad.minX), MathHelper.floor(broad.minY), MathHelper.floor(broad.minZ),
-            MathHelper.floor(broad.maxX), MathHelper.floor(broad.maxY), MathHelper.floor(broad.maxZ))) {
+        for (BlockPos pos : BlockPos.betweenClosed(Mth.floor(broad.minX), Mth.floor(broad.minY), Mth.floor(broad.minZ),
+            Mth.floor(broad.maxX), Mth.floor(broad.maxY), Mth.floor(broad.maxZ))) {
             PendingWeb pending = pendingWebs.get(pos);
-            if (mc.world.getBlockState(pos).isOf(Blocks.COBWEB) || pending != null && !pending.expired) obstacles.add(bounds(new Box(pos)));
+            if (mc.level.getBlockState(pos).is(Blocks.COBWEB) || pending != null && !pending.expired) obstacles.add(bounds(new AABB(pos)));
         }
         return obstacles;
     }
 
-    private Vec3d routeAroundWeb(Vec3d real, Vec3d cur, Vec3d want, double capH, double capV) {
-        Vec3d direct = capMove(want.subtract(cur), capH, capV);
-        if (sweepMove(real, cur, direct).squaredDistanceTo(direct) < 1e-10) {
+    private Vec3 routeAroundWeb(Vec3 real, Vec3 cur, Vec3 want, double capH, double capV) {
+        Vec3 direct = capMove(want.subtract(cur), capH, capV);
+        if (sweepMove(real, cur, direct).distanceToSqr(direct) < 1e-10) {
             avoidanceWaypoint = avoidanceRise = null;
             return null;
         }
@@ -1366,23 +1365,23 @@ public class Lance extends Module {
         }
         if (avoidanceWaypoint == null) {
             if (webSafeFraction(bodyAt(cur), direct) >= 0.999) return null;
-            Vec3d relativeGoal = want.subtract(cur);
-            Box body = bodyAt(cur);
-            Box routeArea = body.expand(4, 0, 4).stretch(0, 3, 0);
+            Vec3 relativeGoal = want.subtract(cur);
+            AABB body = bodyAt(cur);
+            AABB routeArea = body.inflate(4, 0, 4).expandTowards(0, 3, 0);
             var detour = LancePathSafety.detour(bounds(bodyAt(cur)), relativeGoal.x, relativeGoal.y, relativeGoal.z,
                 pathObstacles(routeArea, true));
             if (detour == null) return null;
-            Vec3d side = cur.add(detour.sideX(), 0, detour.sideZ());
-            Vec3d top = side.add(0, detour.rise(), 0);
+            Vec3 side = cur.add(detour.sideX(), 0, detour.sideZ());
+            Vec3 top = side.add(0, detour.rise(), 0);
             boolean straightUp = detour.sideX() == 0 && detour.sideZ() == 0;
             avoidanceWaypoint = straightUp ? top : side;
             avoidanceRise = straightUp ? null : top;
             avoidanceUntil = tickCounter + 20;
             dbg("WEB-DETOUR waypoint=%.2f/%.2f/%.2f", avoidanceWaypoint.x, avoidanceWaypoint.y, avoidanceWaypoint.z);
         }
-        Vec3d step = capMove(avoidanceWaypoint.subtract(cur), capH, capV);
-        Vec3d safe = sweepMove(real, cur, step);
-        if (safe.lengthSquared() < 1e-6) avoidanceWaypoint = avoidanceRise = null;
+        Vec3 step = capMove(avoidanceWaypoint.subtract(cur), capH, capV);
+        Vec3 safe = sweepMove(real, cur, step);
+        if (safe.lengthSqr() < 1e-6) avoidanceWaypoint = avoidanceRise = null;
         return safe;
     }
 
@@ -1391,36 +1390,36 @@ public class Lance extends Module {
         return Math.min(24, Math.max(6, couchTiming.latencyTicks(PlayerUtils.getPing()) + 4));
     }
 
-    private void rememberWire(Vec3d position) {
-        Box footprint = bodyAt(position).expand(0.3);
+    private void rememberWire(Vec3 position) {
+        AABB footprint = bodyAt(position).inflate(0.3);
 
-        footprint = new Box(footprint.minX, footprint.minY, footprint.minZ, footprint.maxX,
+        footprint = new AABB(footprint.minX, footprint.minY, footprint.minZ, footprint.maxX,
             Math.max(footprint.maxY, position.y + 1.8), footprint.maxZ);
-        if (lastWire != null && position.squaredDistanceTo(lastWire) < 36) footprint = footprint.union(bodyAt(lastWire).expand(0.3));
+        if (lastWire != null && position.distanceToSqr(lastWire) < 36) footprint = footprint.minmax(bodyAt(lastWire).inflate(0.3));
         recentWire.addLast(new WireFootprint(tickCounter, footprint));
         while (recentWire.size() > 128) recentWire.removeFirst();
     }
 
-    private static Vec3d capMove(Vec3d d, double capH, double capV) {
-        return d.multiply(LanceMovementMath.capScale(d.x, d.y, d.z, capH, capV));
+    private static Vec3 capMove(Vec3 d, double capH, double capV) {
+        return d.scale(LanceMovementMath.capScale(d.x, d.y, d.z, capH, capV));
     }
 
-    private static Vec3d approachMove(Vec3d d, double capH, double capV) {
+    private static Vec3 approachMove(Vec3 d, double capH, double capV) {
         LanceMovementMath.Step step = LanceMovementMath.approachStep(d.x, d.y, d.z, capH, capV);
-        return new Vec3d(step.x(), step.y(), step.z());
+        return new Vec3(step.x(), step.y(), step.z());
     }
 
     private void walkHome() {
         if (lastClaim == null) { returnClaim = null; ox = oy = oz = 0; homeBlocked = 0; return; }
-        if (!mc.player.isGliding() || srvGliding == Boolean.FALSE) { adoptGhost("flight ended during return"); return; }
-        Vec3d real = mc.player.getEntityPos();
+        if (!mc.player.isFallFlying() || srvGliding == Boolean.FALSE) { adoptGhost("flight ended during return"); return; }
+        Vec3 real = mc.player.position();
         if (lastClaim.distanceTo(real) > maxOffset.get() + 8) {
             adoptGhost("return leash exceeded");
             return;
         }
 
-        Vec3d cur = lastWire != null ? lastWire : lastClaim;
-        Vec3d d = real.subtract(cur);
+        Vec3 cur = lastWire != null ? lastWire : lastClaim;
+        Vec3 d = real.subtract(cur);
         d = sweepMove(real, cur, capMove(d, MAX_H, 1.2));
         refreshCrystalSafety();
         d = protectCrystalMove(cur, real, d, maxOffset.get() * 0.95);
@@ -1433,7 +1432,7 @@ public class Lance extends Module {
             return;
         }
         homeBlocked = 0;
-        Vec3d next = cur.add(d);
+        Vec3 next = cur.add(d);
         ox = next.x - real.x; oy = next.y - real.y; oz = next.z - real.z;
         lastClaim = next;
         claimsSinceSetback++;
@@ -1448,14 +1447,14 @@ public class Lance extends Module {
     @EventHandler(priority = EventPriority.LOWEST)
     private void onSend(PacketEvent.Send event) {
         if (!ownsCurrentBody() || correcting || event.connection != ownerNetwork.getConnection()) return;
-        if (event.packet instanceof ClientCommandC2SPacket c && c.getMode() == ClientCommandC2SPacket.Mode.START_FALL_FLYING) relightPending = relightWait();
-        if (!(event.packet instanceof PlayerMoveC2SPacket p)) return;
+        if (event.packet instanceof ServerboundPlayerCommandPacket c && c.getAction() == ServerboundPlayerCommandPacket.Action.START_FALL_FLYING) relightPending = relightWait();
+        if (!(event.packet instanceof ServerboundMovePlayerPacket p)) return;
 
         if (protectedWireTick == tickCounter) { event.cancel(); return; }
         if (lastClaim == null) return;
         if (plannedAimTick == tickCounter) {
 
-            if (!p.changesLook() || !p.changesPosition()) {
+            if (!p.hasRotation() || !p.hasPosition()) {
                 event.cancel();
                 sendPos();
                 return;
@@ -1465,7 +1464,7 @@ public class Lance extends Module {
         }
 
         ((PlayerMoveC2SPacketAccessor) p).quiettee$setOnGround(false);
-        if (!p.changesPosition()) return;
+        if (!p.hasPosition()) return;
         ((PlayerMoveC2SPacketAccessor) p).quiettee$setX(lastClaim.x);
         ((PlayerMoveC2SPacketAccessor) p).quiettee$setY(lastClaim.y);
         ((PlayerMoveC2SPacketAccessor) p).quiettee$setZ(lastClaim.z);
@@ -1474,28 +1473,28 @@ public class Lance extends Module {
     @EventHandler
     private void onSent(PacketEvent.Sent event) {
         if (!ownsCurrentBody() || correcting || event.connection != ownerNetwork.getConnection()) return;
-        if (relightArmed && event.packet instanceof PlayerMoveC2SPacket rp && rp.changesPosition() && !rp.isOnGround()) relightAirborneMove = true;
-        if (event.packet instanceof PlayerInteractBlockC2SPacket block && sendingWeb != null) {
+        if (relightArmed && event.packet instanceof ServerboundMovePlayerPacket rp && rp.hasPosition() && !rp.isOnGround()) relightAirborneMove = true;
+        if (event.packet instanceof ServerboundUseItemOnPacket block && sendingWeb != null) {
             webSentSequence = block.getSequence();
-            BlockHitResult hit = block.getBlockHitResult();
+            BlockHitResult hit = block.getHitResult();
             dbg("BLOCK-SENT intended=%s clicked=%s side=%s hit=%s ghostDistance=%.3f sequence=%d selected=%d active=%s using=%b",
-                sendingWeb.pos.toShortString(), hit.getBlockPos().toShortString(), hit.getSide(), hit.getPos(),
-                lastWire == null ? -1 : lastWire.add(0, EYE, 0).distanceTo(hit.getPos()), block.getSequence(),
-                mc.player.getInventory().getSelectedSlot(), mc.player.getActiveItem().getItem(), mc.player.isUsingItem());
-        } else if (event.packet instanceof UpdateSelectedSlotC2SPacket slot) {
-            dbg("ITEM-SENT SLOT slot=%d selected=%d active=%s using=%b key=%b weave=%b", slot.getSelectedSlot(),
-                mc.player.getInventory().getSelectedSlot(), mc.player.getActiveItem().getItem(), mc.player.isUsingItem(), mc.options.useKey.isPressed(), weavingTier != null);
-        } else if (event.packet instanceof PlayerInteractItemC2SPacket use) {
+                sendingWeb.pos.toShortString(), hit.getBlockPos().toShortString(), hit.getDirection(), hit.getLocation(),
+                lastWire == null ? -1 : lastWire.add(0, EYE, 0).distanceTo(hit.getLocation()), block.getSequence(),
+                mc.player.getInventory().getSelectedSlot(), mc.player.getUseItem().getItem(), mc.player.isUsingItem());
+        } else if (event.packet instanceof ServerboundSetCarriedItemPacket slot) {
+            dbg("ITEM-SENT SLOT slot=%d selected=%d active=%s using=%b key=%b weave=%b", slot.getSlot(),
+                mc.player.getInventory().getSelectedSlot(), mc.player.getUseItem().getItem(), mc.player.isUsingItem(), mc.options.keyUse.isDown(), weavingTier != null);
+        } else if (event.packet instanceof ServerboundUseItemPacket use) {
             dbg("ITEM-SENT USE hand=%s sequence=%d selected=%d active=%s using=%b key=%b gen=%d", use.getHand(), use.getSequence(),
-                mc.player.getInventory().getSelectedSlot(), mc.player.getActiveItem().getItem(), mc.player.isUsingItem(), mc.options.useKey.isPressed(), couchGeneration);
-        } else if (event.packet instanceof PlayerActionC2SPacket action && action.getAction() == PlayerActionC2SPacket.Action.RELEASE_USE_ITEM) {
+                mc.player.getInventory().getSelectedSlot(), mc.player.getUseItem().getItem(), mc.player.isUsingItem(), mc.options.keyUse.isDown(), couchGeneration);
+        } else if (event.packet instanceof ServerboundPlayerActionPacket action && action.getAction() == ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM) {
             dbg("ITEM-SENT RELEASE selected=%d active=%s using=%b key=%b gen=%d", mc.player.getInventory().getSelectedSlot(),
-                mc.player.getActiveItem().getItem(), mc.player.isUsingItem(), mc.options.useKey.isPressed(), couchGeneration);
+                mc.player.getUseItem().getItem(), mc.player.isUsingItem(), mc.options.keyUse.isDown(), couchGeneration);
         }
-        if (!(event.packet instanceof PlayerMoveC2SPacket p) || !p.changesPosition()) return;
+        if (!(event.packet instanceof ServerboundMovePlayerPacket p) || !p.hasPosition()) return;
         recordWire(p);
         posSentThisTick = true;
-        if (recordStrikeOnSend && target != null && lastClaim != null && lastWire.squaredDistanceTo(lastClaim) < 1e-6) {
+        if (recordStrikeOnSend && target != null && lastClaim != null && lastWire.distanceToSqr(lastClaim) < 1e-6) {
             dbg("STRIKE-SENT target=%d wire=%s", target.getId(), lastWire);
             beat.strike(tickCounter);
             strikeLast = true;
@@ -1503,7 +1502,7 @@ public class Lance extends Module {
             while (pendingStrikes.size() > 16) pendingStrikes.removeFirst();
             recordStrikeOnSend = false;
         }
-        if (lastClaim != null && lastWire.squaredDistanceTo(lastClaim) < 1e-6) {
+        if (lastClaim != null && lastWire.distanceToSqr(lastClaim) < 1e-6) {
             if (protectMovementThisTick) protectedWireTick = tickCounter;
             wireSyncWanted = false;
             if (lastClaim == returnClaim) {
@@ -1511,21 +1510,21 @@ public class Lance extends Module {
                 ox = oy = oz = 0;
                 dbg("RETURN synced on wire");
             }
-        } else if (lastClaim == null && lastWire.squaredDistanceTo(mc.player.getEntityPos()) < 1e-6) {
+        } else if (lastClaim == null && lastWire.distanceToSqr(mc.player.position()) < 1e-6) {
             wireSyncWanted = false;
         }
     }
 
-    private void recordWire(PlayerMoveC2SPacket p) {
-        Vec3d position = new Vec3d(p.getX(mc.player.getX()), p.getY(mc.player.getY()), p.getZ(mc.player.getZ()));
-        if (lastClaim != null && position.squaredDistanceTo(lastClaim) < 1e-6) lastClaimWireTick = tickCounter;
+    private void recordWire(ServerboundMovePlayerPacket p) {
+        Vec3 position = new Vec3(p.getX(mc.player.getX()), p.getY(mc.player.getY()), p.getZ(mc.player.getZ()));
+        if (lastClaim != null && position.distanceToSqr(lastClaim) < 1e-6) lastClaimWireTick = tickCounter;
         else if (lastClaim != null) dbg("WIRE claim mismatch error=%.3f tag=%d intended=%s sent=%s", position.distanceTo(lastClaim),
             ((IPlayerMoveC2SPacket) p).meteor$getTag(), lastClaim, position);
         if (lastWire != null) {
-            Vec3d delta = position.subtract(lastWire);
+            Vec3 delta = position.subtract(lastWire);
             wireTrace.addLast(String.format("t%d h%.2f v%+.2f g%b%s", tickCounter, Math.hypot(delta.x, delta.z), delta.y, p.isOnGround(), posSentThisTick ? " extra" : ""));
             while (wireTrace.size() > 8) wireTrace.removeFirst();
-            if (posSentThisTick && delta.lengthSquared() > 1e-6) dbg("WIRE extra position in tick: delta=%s claimError=%.3f", delta,
+            if (posSentThisTick && delta.lengthSqr() > 1e-6) dbg("WIRE extra position in tick: delta=%s claimError=%.3f", delta,
                 lastClaim == null ? 0 : position.distanceTo(lastClaim));
         }
         rememberWire(position);
@@ -1538,17 +1537,17 @@ public class Lance extends Module {
         if (!ownsCurrentBody() || correcting) return;
         relightPost();
         boolean claimSent = posSentThisTick && (lastClaim == null
-            || lastWire != null && lastWire.squaredDistanceTo(lastClaim) < 1e-6);
+            || lastWire != null && lastWire.distanceToSqr(lastClaim) < 1e-6);
         if (!claimSent && (lastClaim != null || wireSyncWanted || volleyWanted || weavingTier != null)) sendPos();
         if (volleyWanted || weavingTier != null) { volleyWanted = false; if (posSentThisTick) webTick(); }
     }
 
     private void sendPos() {
-        PlayerMoveC2SPacket p = new PlayerMoveC2SPacket.Full(mc.player.getX() + ox, mc.player.getY() + oy, mc.player.getZ() + oz,
+        ServerboundMovePlayerPacket p = new ServerboundMovePlayerPacket.PosRot(mc.player.getX() + ox, mc.player.getY() + oy, mc.player.getZ() + oz,
             plannedAimTick == tickCounter ? plannedYaw : Rotations.serverYaw,
             plannedAimTick == tickCounter ? plannedPitch : Rotations.serverPitch, false, mc.player.horizontalCollision);
         ((IPlayerMoveC2SPacket) p).meteor$setTag(TAG);
-        mc.getNetworkHandler().sendPacket(p);
+        mc.getConnection().send(p);
     }
 
     @EventHandler
@@ -1557,8 +1556,8 @@ public class Lance extends Module {
         EchoOwner observedOwner = echoOwner;
         long observedGeneration = couchGeneration;
         if (observedOwner != null && event.connection == observedOwner.connection
-            && event.packet instanceof EntityTrackerUpdateS2CPacket p && p.id() == observedOwner.playerId) {
-            for (DataTracker.SerializedEntry<?> entry : p.trackedValues()) {
+            && event.packet instanceof ClientboundSetEntityDataPacket p && p.id() == observedOwner.playerId) {
+            for (SynchedEntityData.DataValue<?> entry : p.packedItems()) {
                 if (entry.id() == 0 && entry.value() instanceof Byte b) {
                     glideEchoes.add(new GlideEcho(observedOwner, (b & 0x80) != 0));
                 } else if (entry.id() == LivingEntityAccessor.quiettee$livingFlags().id() && entry.value() instanceof Byte b) {
@@ -1569,11 +1568,11 @@ public class Lance extends Module {
         BlockPos selfWeb = clearingWeb;
         if (observedOwner != null && event.connection == observedOwner.connection && (!pendingWebSnapshot.isEmpty() || selfWeb != null)) {
             Set<BlockPos> watched = pendingWebSnapshot;
-            if (event.packet instanceof BlockUpdateS2CPacket p && (watched.contains(p.getPos()) || p.getPos().equals(selfWeb))) {
-                webEchoes.add(new WebEcho(observedOwner, p.getPos().toImmutable(), p.getState().isOf(Blocks.COBWEB)));
-            } else if (event.packet instanceof ChunkDeltaUpdateS2CPacket p) {
-                p.visitUpdates((pos, state) -> {
-                    if (watched.contains(pos) || pos.equals(selfWeb)) webEchoes.add(new WebEcho(observedOwner, pos.toImmutable(), state.isOf(Blocks.COBWEB)));
+            if (event.packet instanceof ClientboundBlockUpdatePacket p && (watched.contains(p.getPos()) || p.getPos().equals(selfWeb))) {
+                webEchoes.add(new WebEcho(observedOwner, p.getPos().immutable(), p.getBlockState().is(Blocks.COBWEB)));
+            } else if (event.packet instanceof ClientboundSectionBlocksUpdatePacket p) {
+                p.runUpdates((pos, state) -> {
+                    if (watched.contains(pos) || pos.equals(selfWeb)) webEchoes.add(new WebEcho(observedOwner, pos.immutable(), state.is(Blocks.COBWEB)));
                 });
             }
         }
@@ -1630,7 +1629,7 @@ public class Lance extends Module {
         for (var iterator = pendingWebs.entrySet().iterator(); iterator.hasNext();) {
             var entry = iterator.next();
             PendingWeb pending = entry.getValue();
-            if (pending.expired && !mc.world.getBlockState(entry.getKey()).isOf(Blocks.COBWEB)) {
+            if (pending.expired && !mc.level.getBlockState(entry.getKey()).is(Blocks.COBWEB)) {
                 iterator.remove();
                 changed = true;
             } else if (!pending.expired && tickCounter - pending.tick >= timeout) {
@@ -1663,16 +1662,16 @@ public class Lance extends Module {
         pendingStrikes.clear();
         if (sameBody) {
             dbg("CORRECTION from=%s to=%s localWeb=%b pending=%d velocity=%s claimAge=%dt volleyAge=%dt wire=%s",
-                correctionFrom, mc.player.getEntityPos(), hasWeb(mc.player.getBoundingBox()), pendingWebs.size(), mc.player.getVelocity(),
+                correctionFrom, mc.player.position(), hasWeb(mc.player.getBoundingBox()), pendingWebs.size(), mc.player.getDeltaMovement(),
                 tickCounter - lastClaimWireTick, tickCounter - lastWebVolleyTick, String.join(" | ", wireTrace));
-            lastWire = mc.player.getEntityPos();
+            lastWire = mc.player.position();
             rememberWire(lastWire);
             lastWireTick = tickCounter;
             posSentThisTick = true;
             if (isActive()) onSetback();
             if (srvGliding == Boolean.FALSE) {
                 beginGlideRecovery();
-                recoveryVy = Math.min(0, mc.player.getVelocity().y);
+                recoveryVy = Math.min(0, mc.player.getDeltaMovement().y);
             }
         }
         if (homing) stopHoming();
@@ -1684,9 +1683,9 @@ public class Lance extends Module {
             manualWebControl = true;
             return false;
         }
-        if (!clearSelfWebs.get() || mc.interactionManager == null) {
+        if (!clearSelfWebs.get() || mc.gameMode == null) {
             finishSelfWeb(true);
-            manualWebControl = hasWeb(bodyAt(lastWire != null ? lastWire : mc.player.getEntityPos()));
+            manualWebControl = hasWeb(bodyAt(lastWire != null ? lastWire : mc.player.position()));
             if (manualWebControl) {
                 if (lastClaim != null) adoptGhost("manual web recovery");
                 releaseCouch();
@@ -1694,10 +1693,10 @@ public class Lance extends Module {
             return false;
         }
         if (clearingWeb != null && mc.player.getInventory().getSelectedSlot() == clearingSlot
-            && !usableWebTool(mc.player.getMainHandStack())) finishSelfWeb(true);
+            && !usableWebTool(mc.player.getMainHandItem())) finishSelfWeb(true);
         if (clearingWeb != null) {
-            if (mc.player.getInventory().getSelectedSlot() != clearingSlot || mc.options.attackKey.isPressed()
-                || mc.player.isUsingItem() && tier(mc.player.getActiveItem().getItem()) == null) {
+            if (mc.player.getInventory().getSelectedSlot() != clearingSlot || mc.options.keyAttack.isDown()
+                || mc.player.isUsingItem() && tier(mc.player.getUseItem().getItem()) == null) {
                 finishSelfWeb(false);
                 selfWebPauseUntil = tickCounter + 20;
                 manualWebControl = true;
@@ -1710,16 +1709,16 @@ public class Lance extends Module {
                 manualWebControl = true;
                 return false;
             }
-            if (clearingConfirmed && !mc.world.getBlockState(clearingWeb).isOf(Blocks.COBWEB)) {
+            if (clearingConfirmed && !mc.level.getBlockState(clearingWeb).is(Blocks.COBWEB)) {
                 dbg("SELF-WEB removed at=%s", clearingWeb.toShortString());
                 finishSelfWeb(true);
                 cooldown = Math.max(cooldown, 4);
             } else {
 
-                if (!bodyAt(lastWire != null ? lastWire : mc.player.getEntityPos()).expand(0.05).intersects(new Box(clearingWeb))) {
+                if (!bodyAt(lastWire != null ? lastWire : mc.player.position()).inflate(0.05).intersects(new AABB(clearingWeb))) {
                     finishSelfWeb(true);
                 } else {
-                    if (mc.world.getBlockState(clearingWeb).isOf(Blocks.COBWEB)) {
+                    if (mc.level.getBlockState(clearingWeb).is(Blocks.COBWEB)) {
                         BlockBreaker.breakBlock(clearingWeb, true);
                     }
                     return true;
@@ -1727,15 +1726,15 @@ public class Lance extends Module {
             }
         }
 
-        Vec3d server = lastWire != null ? lastWire : mc.player.getEntityPos();
-        Box body = bodyAt(server);
+        Vec3 server = lastWire != null ? lastWire : mc.player.position();
+        AABB body = bodyAt(server);
         BlockPos obstruction = null;
-        for (BlockPos pos : BlockPos.iterate(MathHelper.floor(body.minX), MathHelper.floor(body.minY), MathHelper.floor(body.minZ),
-            MathHelper.floor(body.maxX), MathHelper.floor(body.maxY), MathHelper.floor(body.maxZ))) {
-            if (body.intersects(new Box(pos)) && mc.world.getBlockState(pos).isOf(Blocks.COBWEB)) { obstruction = pos.toImmutable(); break; }
+        for (BlockPos pos : BlockPos.betweenClosed(Mth.floor(body.minX), Mth.floor(body.minY), Mth.floor(body.minZ),
+            Mth.floor(body.maxX), Mth.floor(body.maxY), Mth.floor(body.maxZ))) {
+            if (body.intersects(new AABB(pos)) && mc.level.getBlockState(pos).is(Blocks.COBWEB)) { obstruction = pos.immutable(); break; }
         }
         if (obstruction == null) return false;
-        if (mc.options.attackKey.isPressed() || mc.player.isUsingItem() && tier(mc.player.getActiveItem().getItem()) == null) {
+        if (mc.options.keyAttack.isDown() || mc.player.isUsingItem() && tier(mc.player.getUseItem().getItem()) == null) {
             manualWebControl = true;
             if (lastClaim != null) adoptGhost("manual web recovery");
             releaseCouch();
@@ -1745,15 +1744,15 @@ public class Lance extends Module {
         releaseCouch();
         fActive = fVerticalActive = false;
         strikeLast = volleyWanted = false;
-        mc.player.setVelocity(Vec3d.ZERO);
+        mc.player.setDeltaMovement(Vec3.ZERO);
 
-        BlockState state = mc.world.getBlockState(obstruction);
+        BlockState state = mc.level.getBlockState(obstruction);
         int toolSlot = -1;
         double bestSpeed = 0;
         for (int slot = 0; slot < 9; slot++) {
-            ItemStack stack = mc.player.getInventory().getStack(slot);
+            ItemStack stack = mc.player.getInventory().getItem(slot);
             if (!usableWebTool(stack)) continue;
-            double speed = stack.getMiningSpeedMultiplier(state);
+            double speed = stack.getDestroySpeed(state);
             if (speed > bestSpeed) { bestSpeed = speed; toolSlot = slot; }
         }
         if (toolSlot < 0) {
@@ -1772,15 +1771,15 @@ public class Lance extends Module {
     }
 
     private static boolean usableWebTool(ItemStack stack) {
-        return (stack.isOf(Items.SHEARS) || stack.isIn(ItemTags.SWORDS))
-            && (!stack.isDamageable() || stack.getDamage() < stack.getMaxDamage() - 2);
+        return (stack.is(Items.SHEARS) || stack.is(ItemTags.SWORDS))
+            && (!stack.isDamageableItem() || stack.getDamageValue() < stack.getMaxDamage() - 2);
     }
 
     private void finishSelfWeb(boolean restore) {
         if (clearingWeb != null && ownsCurrentBody()) {
-            if (mc.interactionManager != null) {
+            if (mc.gameMode != null) {
                 BlockUtils.breaking = false;
-                mc.interactionManager.cancelBlockBreaking();
+                mc.gameMode.stopDestroyBlock();
             }
             if (restore && clearingOriginalSlot >= 0 && mc.player.getInventory().getSelectedSlot() == clearingSlot) InvUtils.swap(clearingOriginalSlot, false);
             recouchIn = Math.max(recouchIn, 2);
@@ -1811,14 +1810,14 @@ public class Lance extends Module {
     }
 
     private Tier heldTier() {
-        return tier(mc.player.getMainHandStack().getItem());
+        return tier(mc.player.getMainHandItem().getItem());
     }
 
     private int bestSpearSlot() {
         double bestMult = -1;
         int bestSlot = -1;
         for (int i = 0; i < 9; i++) {
-            ItemStack s = mc.player.getInventory().getStack(i);
+            ItemStack s = mc.player.getInventory().getItem(i);
             Tier t = tier(s.getItem());
             if (t != null && t.mult() > bestMult) { bestMult = t.mult(); bestSlot = i; }
         }
@@ -1827,12 +1826,12 @@ public class Lance extends Module {
 
     private void pressCouch() {
 
-        if (mc.player.isUsingItem() && tier(mc.player.getActiveItem().getItem()) != null) mc.player.clearActiveItem();
+        if (mc.player.isUsingItem() && tier(mc.player.getUseItem().getItem()) != null) mc.player.stopUsingItem();
         setUseKey(true);
         srvCouch = 0;
         couchPressTick = tickCounter;
         couchGeneration = couchTiming.start(tickCounter);
-        ActionResult r = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        InteractionResult r = mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
         dbg("couch PRESS (%s, srvUse=%b, gen=%d, replyBudget=%dt)", r, srvUse, couchGeneration, couchTiming.responseBudget(PlayerUtils.getPing()));
     }
 
@@ -1840,7 +1839,7 @@ public class Lance extends Module {
         clearPostWebRetry();
         if (pressedUse) setUseKey(false);
 
-        if (mc.player != null && mc.interactionManager != null && srvCouch >= 0 && heldTier() != null) mc.interactionManager.stopUsingItem(mc.player);
+        if (mc.player != null && mc.gameMode != null && srvCouch >= 0 && heldTier() != null) mc.gameMode.releaseUsingItem(mc.player);
         srvCouch = -1;
         couchGeneration = couchTiming.stop();
     }
@@ -1854,22 +1853,22 @@ public class Lance extends Module {
     private void reassertCouch() {
         if (!ownsCurrentBody() || correcting || cooldown > 0 || selfWebHold || manualWebControl || !pressedUse
             || target == null || target != postWebRetryTarget || mc.player.getInventory().getSelectedSlot() != postWebSpearSlot
-            || heldTier() == null || mc.options.attackKey.isPressed()
-            || mc.player.isUsingItem() && tier(mc.player.getActiveItem().getItem()) == null) {
+            || heldTier() == null || mc.options.keyAttack.isDown()
+            || mc.player.isUsingItem() && tier(mc.player.getUseItem().getItem()) == null) {
             clearPostWebRetry();
             return;
         }
         if (!couchTiming.reassert(tickCounter, PlayerUtils.getPing())) return;
 
-        if (mc.player.isUsingItem()) mc.player.clearActiveItem();
+        if (mc.player.isUsingItem()) mc.player.stopUsingItem();
         srvCouch = 0;
-        ActionResult result = mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
+        InteractionResult result = mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
         dbg("couch USE-REASSERT (%s, firstAge=%dt, deadline=%dt, gen=%d; no release or slot change)",
             result, couchTiming.earliestUseAge(tickCounter), couchTiming.responseBudget(PlayerUtils.getPing()), couchGeneration);
     }
 
     private void setUseKey(boolean pressed) {
-        mc.options.useKey.setPressed(pressed);
+        mc.options.keyUse.setDown(pressed);
         pressedUse = pressed;
     }
 
@@ -1900,19 +1899,19 @@ public class Lance extends Module {
 
     private boolean baseValid(Entity e) {
         if (e == mc.player || e == mc.getCameraEntity()) return false;
-        if (!(e instanceof LivingEntity le) || le.isDead() || !e.isAlive()) return false;
+        if (!(e instanceof LivingEntity le) || le.isDeadOrDying() || !e.isAlive()) return false;
         if (!entities.get().contains(e.getType())) return false;
-        return !(e instanceof PlayerEntity p) || (!p.isCreative() && !p.isSpectator() && Friends.get().shouldAttack(p));
+        return !(e instanceof Player p) || (!p.isCreative() && !p.isSpectator() && Friends.get().shouldAttack(p));
     }
 
     private boolean inFov(Entity e) {
         if (fov.get() >= 360) return true;
-        Box b = e.getBoundingBox();
-        Vec3d eye = mc.player.getEyePos();
-        Vec3d dir = new Vec3d(e.getX() - eye.x, (b.minY + b.maxY) * 0.5 - eye.y, e.getZ() - eye.z);
-        if (dir.lengthSquared() <= 1e-6) return true;
-        double dot = mc.player.getRotationVec(1f).dotProduct(dir.normalize());
-        return Math.toDegrees(Math.acos(MathHelper.clamp(dot, -1, 1))) <= fov.get() / 2;
+        AABB b = e.getBoundingBox();
+        Vec3 eye = mc.player.getEyePosition();
+        Vec3 dir = new Vec3(e.getX() - eye.x, (b.minY + b.maxY) * 0.5 - eye.y, e.getZ() - eye.z);
+        if (dir.lengthSqr() <= 1e-6) return true;
+        double dot = mc.player.getViewVector(1f).dot(dir.normalize());
+        return Math.toDegrees(Math.acos(Mth.clamp(dot, -1, 1))) <= fov.get() / 2;
     }
 
     private static float hp(LivingEntity le) {
@@ -1935,7 +1934,7 @@ public class Lance extends Module {
     private void webTick() {
         boolean continuing = weavingTier != null;
         if (target == null || lastWire == null || selfWebHold || manualWebControl || srvGliding == Boolean.FALSE
-            || !webEnabled.get() || !mc.player.isGliding()) { finishWeave(true); return; }
+            || !webEnabled.get() || !mc.player.isFallFlying()) { finishWeave(true); return; }
         Tier currentTier = heldTier();
         boolean ready = currentTier != null && couchTiming.confirmed()
             && srvCouch >= currentTier.delay + couchTiming.latencyTicks(PlayerUtils.getPing()) + 1;
@@ -1947,12 +1946,12 @@ public class Lance extends Module {
             return;
         }
         int webSlot = continuing ? weavingSlot : webs.slot();
-        if (continuing && (mc.player.getInventory().getSelectedSlot() != webSlot || !mc.player.getMainHandStack().isOf(Items.COBWEB))) {
+        if (continuing && (mc.player.getInventory().getSelectedSlot() != webSlot || !mc.player.getMainHandItem().is(Items.COBWEB))) {
             finishWeave(false); return;
         }
 
-        Vec3d eye = lastWire.add(0, EYE, 0);
-        int budget = Math.min(Math.max(websPerTick.get(), 1), mc.player.getInventory().getStack(webSlot).getCount());
+        Vec3 eye = lastWire.add(0, EYE, 0);
+        int budget = Math.min(Math.max(websPerTick.get(), 1), mc.player.getInventory().getItem(webSlot).getCount());
         budget = Math.min(budget, Math.max(0, 256 - pendingWebs.size()));
         budget = Math.min(budget, 27 - (continuing ? weavingAttempts : 0));
         List<WebPlacement> plan = new ArrayList<>(budget);
@@ -1970,21 +1969,21 @@ public class Lance extends Module {
         }
         int attempted = 0, accepted = 0;
         boolean completed = false;
-        boolean sneaking = mc.player.isSneaking();
+        boolean sneaking = mc.player.isShiftKeyDown();
 
         if (!continuing) {
             weavingTier = heldTier();
-            weavingRange = mc.player.getAttackRange();
+            weavingRange = mc.player.entityAttackRange();
             weavingOriginalSlot = mc.player.getInventory().getSelectedSlot();
             weavingSlot = webSlot;
             weavingStartedAt = lastWebVolleyTick = tickCounter;
             weavingAttempts = 0;
-            if (covered || vVel.lengthSquared() <= 0.0625) { shellAttempted = true; shellCenter = vPos; }
+            if (covered || vVel.lengthSqr() <= 0.0625) { shellAttempted = true; shellCenter = vPos; }
             releaseCouch();
         }
         try {
             if (!continuing) InvUtils.swap(webSlot, false);
-            mc.player.setSneaking(false);
+            mc.player.setShiftKeyDown(false);
             for (WebPlacement planned : plan) {
 
                 WebPlacement placement = prepareWeb(new LanceWebMath.Cell(planned.pos.getX(), planned.pos.getY(), planned.pos.getZ()));
@@ -1994,12 +1993,12 @@ public class Lance extends Module {
                 sendingWeb = placement;
                 webSentSequence = -1;
                 try {
-                    ActionResult result = mc.interactionManager.interactBlock(mc.player, Hand.MAIN_HAND, placement.hit);
+                    InteractionResult result = mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, placement.hit);
                     attempted++;
-                    dbg("WEB-ATTEMPT intended=%s sequence=%d clientAccepted=%b", placement.pos.toShortString(), webSentSequence, result.isAccepted());
-                    if (result.isAccepted()) {
+                    dbg("WEB-ATTEMPT intended=%s sequence=%d clientAccepted=%b", placement.pos.toShortString(), webSentSequence, result.consumesAction());
+                    if (result.consumesAction()) {
                         accepted++;
-                        mc.getNetworkHandler().sendPacket(new HandSwingC2SPacket(Hand.MAIN_HAND));
+                        mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
                     }
                 } finally {
                     sendingWeb = null;
@@ -2007,10 +2006,10 @@ public class Lance extends Module {
             }
             completed = true;
         } finally {
-            mc.player.setSneaking(sneaking);
+            mc.player.setShiftKeyDown(sneaking);
             weavingAttempts += attempted;
             if (!completed || tickCounter - weavingStartedAt >= 2 || weavingAttempts >= 27
-                || !mc.player.getMainHandStack().isOf(Items.COBWEB)) finishWeave(true);
+                || !mc.player.getMainHandItem().is(Items.COBWEB)) finishWeave(true);
         }
         telWebs += attempted;
         dbg("WEBS reason=%s attempted=%d clientAccepted=%d pending=%d burstContinues=%b (server confirmation pending)",
@@ -2023,13 +2022,13 @@ public class Lance extends Module {
         if (restore && ownsCurrentBody() && weavingOriginalSlot >= 0
             && mc.player.getInventory().getSelectedSlot() == weavingSlot) {
             restoredSpear = weavingOriginalSlot != weavingSlot
-                && (mc.player.getMainHandStack().isOf(Items.COBWEB) || mc.player.getMainHandStack().isEmpty())
-                && tier(mc.player.getInventory().getStack(weavingOriginalSlot).getItem()) != null;
+                && (mc.player.getMainHandItem().is(Items.COBWEB) || mc.player.getMainHandItem().isEmpty())
+                && tier(mc.player.getInventory().getItem(weavingOriginalSlot).getItem()) != null;
             restoredSpear &= InvUtils.swap(weavingOriginalSlot, false);
         }
         if (restoredSpear && target != null && !correcting && cooldown == 0 && !selfWebHold && !manualWebControl
-            && !mc.options.attackKey.isPressed()
-            && (!mc.player.isUsingItem() || tier(mc.player.getActiveItem().getItem()) != null)) {
+            && !mc.options.keyAttack.isDown()
+            && (!mc.player.isUsingItem() || tier(mc.player.getUseItem().getItem()) != null)) {
             postWebSpearSlot = weavingOriginalSlot;
             postWebRetryTarget = target;
             couchTiming.allowNextPostWebRetry();
@@ -2043,12 +2042,12 @@ public class Lance extends Module {
 
     private boolean observedWeb(LanceWebMath.Cell cell) {
         BlockPos pos = new BlockPos(cell.x(), cell.y(), cell.z());
-        return !pendingWebs.containsKey(pos) && mc.world.getBlockState(pos).isOf(Blocks.COBWEB);
+        return !pendingWebs.containsKey(pos) && mc.level.getBlockState(pos).is(Blocks.COBWEB);
     }
 
     private boolean hasUsefulWeb(boolean covered) {
         if (lastWire == null || target == null) return false;
-        Vec3d eye = lastWire.add(0, EYE, 0);
+        Vec3 eye = lastWire.add(0, EYE, 0);
         for (LanceWebMath.Cell cell : LanceWebMath.captureCandidates(serverBounds(target), vVel.x, vVel.y, vVel.z,
             couchTiming.predictionTicks(PlayerUtils.getPing()), eye.x, eye.y, eye.z, webRange.get(), covered)) {
             if (prepareWeb(cell) != null) return true;
@@ -2062,7 +2061,7 @@ public class Lance extends Module {
 
     private boolean needsWebMaintenance(boolean covered) {
         if (!covered) return true;
-        if (shellCenter == null || shellCenter.squaredDistanceTo(vPos) > 2.25) {
+        if (shellCenter == null || shellCenter.distanceToSqr(vPos) > 2.25) {
             shellCenter = vPos;
             shellAttempted = false;
         }
@@ -2072,37 +2071,37 @@ public class Lance extends Module {
     private WebPlacement prepareWeb(LanceWebMath.Cell candidate) {
         BlockPos pos = new BlockPos(candidate.x(), candidate.y(), candidate.z());
         if (pendingWebs.containsKey(pos) || !BlockUtils.canPlaceBlock(pos, false, Blocks.COBWEB)) return null;
-        Box cell = new Box(pos);
-        if (cell.intersects(mc.player.getBoundingBox().expand(2.0))) return null;
-        Vec3d ghostOffset = lastWire.subtract(mc.player.getEntityPos());
-        if (cell.intersects(mc.player.getBoundingBox().offset(ghostOffset).expand(1.0))) return null;
+        AABB cell = new AABB(pos);
+        if (cell.intersects(mc.player.getBoundingBox().inflate(2.0))) return null;
+        Vec3 ghostOffset = lastWire.subtract(mc.player.position());
+        if (cell.intersects(mc.player.getBoundingBox().move(ghostOffset).inflate(1.0))) return null;
         for (WireFootprint entry : recentWire) {
             if (tickCounter - entry.tick <= wireProtectionTicks() && cell.intersects(entry.swept)) return null;
         }
-        Vec3d eye = lastWire.add(0, EYE, 0);
+        Vec3 eye = lastWire.add(0, EYE, 0);
         LanceWebMath.Click click = LanceWebMath.placementClick(candidate, eye.x, eye.y, eye.z, webRange.get(), webAirPlace.get(), support -> {
             BlockPos neighbour = new BlockPos(support.x(), support.y(), support.z());
             if (pendingWebs.containsKey(neighbour)) return false;
-            BlockState state = mc.world.getBlockState(neighbour);
-            return !state.isAir() && !state.isReplaceable() && !BlockUtils.isClickable(state.getBlock()) && state.getFluidState().isEmpty();
+            BlockState state = mc.level.getBlockState(neighbour);
+            return !state.isAir() && !state.canBeReplaced() && !BlockUtils.isClickable(state.getBlock()) && state.getFluidState().isEmpty();
         });
         if (click == null) return null;
         BlockPos clicked = new BlockPos(click.clicked().x(), click.clicked().y(), click.clicked().z());
         Direction side = click.sideX() < 0 ? Direction.WEST : click.sideX() > 0 ? Direction.EAST
             : click.sideY() < 0 ? Direction.DOWN : click.sideY() > 0 ? Direction.UP
             : click.sideZ() < 0 ? Direction.NORTH : Direction.SOUTH;
-        return new WebPlacement(pos, new BlockHitResult(new Vec3d(click.hitX(), click.hitY(), click.hitZ()), side, clicked, false));
+        return new WebPlacement(pos, new BlockHitResult(new Vec3(click.hitX(), click.hitY(), click.hitZ()), side, clicked, false));
     }
 
     private LanceWebMath.Bounds serverBounds(Entity entity) {
-        Box box = entity.getBoundingBox().offset(vPos.subtract(entity.getEntityPos()));
+        AABB box = entity.getBoundingBox().move(vPos.subtract(entity.position()));
         return new LanceWebMath.Bounds(box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ);
     }
 
     private boolean victimWebbed(Entity entity) {
         return LanceWebMath.hasSustainedWebCoverage(serverBounds(entity), vVel.x, vVel.y, vVel.z, cell -> {
             BlockPos pos = new BlockPos(cell.x(), cell.y(), cell.z());
-            return !pendingWebs.containsKey(pos) && mc.world.getBlockState(pos).isOf(Blocks.COBWEB);
+            return !pendingWebs.containsKey(pos) && mc.level.getBlockState(pos).is(Blocks.COBWEB);
         });
     }
 
@@ -2117,14 +2116,14 @@ public class Lance extends Module {
         crystalDamageCache.clear();
         crystalReductions = null;
         plannedCrystalDamage = 0;
-        if (mc.player == null || mc.world == null) return;
-        Vec3d wire = lastWire != null ? lastWire : mc.player.getEntityPos();
-        Box scan = bodyAt(wire).expand(14);
-        if (target != null) scan = scan.union(new Box(vPos.subtract(20, 20, 20), vPos.add(20, 20, 20)));
+        if (mc.player == null || mc.level == null) return;
+        Vec3 wire = lastWire != null ? lastWire : mc.player.position();
+        AABB scan = bodyAt(wire).inflate(14);
+        if (target != null) scan = scan.minmax(new AABB(vPos.subtract(20, 20, 20), vPos.add(20, 20, 20)));
         Set<LanceCrystalSafety.Point> seen = new java.util.HashSet<>();
-        for (Entity entity : mc.world.getOtherEntities(mc.player, scan,
-            entity -> entity instanceof EndCrystalEntity && !entity.isRemoved())) {
-            LanceCrystalSafety.Point point = crystalPoint(entity.getEntityPos());
+        for (Entity entity : mc.level.getEntities(mc.player, scan,
+            entity -> entity instanceof EndCrystal && !entity.isRemoved())) {
+            LanceCrystalSafety.Point point = crystalPoint(entity.position());
             if (seen.add(point)) crystalPositions.add(point);
         }
         if (crystalPolicy.get() == CrystalPolicy.Distance) return;
@@ -2132,50 +2131,50 @@ public class Lance extends Module {
         if (target == null) return;
 
         List<CrystalPlacer> placers = new ArrayList<>();
-        for (PlayerEntity player : mc.world.getPlayers()) {
+        for (Player player : mc.level.players()) {
             if (player == mc.player || !player.isAlive() || player.isRemoved() || player.isSpectator()
                 || !Friends.get().shouldAttack(player)) continue;
-            PositionInterpolator interpolator = player.getInterpolator();
-            Vec3d observed = interpolator != null ? interpolator.getLerpedPos() : player.getEntityPos();
-            double reach = player.getBlockInteractionRange();
-            if (observed.squaredDistanceTo(vPos) > (reach + 12) * (reach + 12)) continue;
+            InterpolationHandler interpolator = player.getInterpolation();
+            Vec3 observed = interpolator != null ? interpolator.position() : player.position();
+            double reach = player.blockInteractionRange();
+            if (observed.distanceToSqr(vPos) > (reach + 12) * (reach + 12)) continue;
             placers.add(new CrystalPlacer(crystalPoint(observed.add(0, player.getEyeHeight(player.getPose()), 0)), reach));
         }
         crystalPlacers = placers.size();
         if (placers.isEmpty()) return;
 
-        int centerX = MathHelper.floor(vPos.x), centerY = MathHelper.floor(vPos.y), centerZ = MathHelper.floor(vPos.z);
-        for (BlockPos base : BlockPos.iterate(centerX - 5, centerY - 2, centerZ - 5, centerX + 5, centerY + 3, centerZ + 5)) {
-            if (!mc.world.getChunkManager().isChunkLoaded(base.getX() >> 4, base.getZ() >> 4)) continue;
-            BlockState state = mc.world.getBlockState(base);
-            if (!state.isOf(Blocks.OBSIDIAN) && !state.isOf(Blocks.BEDROCK)) continue;
+        int centerX = Mth.floor(vPos.x), centerY = Mth.floor(vPos.y), centerZ = Mth.floor(vPos.z);
+        for (BlockPos base : BlockPos.betweenClosed(centerX - 5, centerY - 2, centerZ - 5, centerX + 5, centerY + 3, centerZ + 5)) {
+            if (!mc.level.getChunkSource().hasChunk(base.getX() >> 4, base.getZ() >> 4)) continue;
+            BlockState state = mc.level.getBlockState(base);
+            if (!state.is(Blocks.OBSIDIAN) && !state.is(Blocks.BEDROCK)) continue;
             LanceCrystalSafety.Point baseMin = new LanceCrystalSafety.Point(base.getX(), base.getY(), base.getZ());
             boolean reachable = false;
             for (CrystalPlacer placer : placers) {
                 if (LanceCrystalSafety.canPlaceAt(placer.eye(), baseMin, placer.reach())) { reachable = true; break; }
             }
             if (!reachable) continue;
-            BlockPos above = base.up();
-            if (!mc.world.getBlockState(above).isAir()) continue;
-            Vec3d source = new Vec3d(base.getX() + 0.5, base.getY() + 1, base.getZ() + 0.5);
-            if (source.squaredDistanceTo(vPos) > 36) continue;
-            Box placementBox = new Box(base.getX(), base.getY() + 1, base.getZ(), base.getX() + 1, base.getY() + 3, base.getZ() + 1);
-            if (!mc.world.getOtherEntities(mc.player, placementBox,
+            BlockPos above = base.above();
+            if (!mc.level.getBlockState(above).isAir()) continue;
+            Vec3 source = new Vec3(base.getX() + 0.5, base.getY() + 1, base.getZ() + 0.5);
+            if (source.distanceToSqr(vPos) > 36) continue;
+            AABB placementBox = new AABB(base.getX(), base.getY() + 1, base.getZ(), base.getX() + 1, base.getY() + 3, base.getZ() + 1);
+            if (!mc.level.getEntities(mc.player, placementBox,
                 entity -> !entity.isSpectator() && !entity.isRemoved()).isEmpty()) continue;
             LanceCrystalSafety.Point point = crystalPoint(source);
             if (seen.add(point)) potentialCrystalPositions.add(point);
         }
     }
 
-    private static LanceCrystalSafety.Point crystalPoint(Vec3d point) {
+    private static LanceCrystalSafety.Point crystalPoint(Vec3 point) {
         return new LanceCrystalSafety.Point(point.x, point.y, point.z);
     }
 
-    private double segmentDamage(Vec3d from, Vec3d to) {
+    private double segmentDamage(Vec3 from, Vec3 to) {
         return evaluateCrystalSegment(from, to, damageLimit());
     }
 
-    private Vec3d protectCrystalMove(Vec3d cur, Vec3d real, Vec3d delta, double leash) {
+    private Vec3 protectCrystalMove(Vec3 cur, Vec3 real, Vec3 delta, double leash) {
         if (damageAllowed(segmentDamage(cur, cur.add(delta)))) return delta;
         double before = positionDamage(cur), after = positionDamage(cur.add(delta));
         if (!damageAllowed(before) && after < before - 0.01
@@ -2183,43 +2182,43 @@ public class Lance extends Module {
         return crystalRetreat(cur, real, leash);
     }
 
-    private double evaluateCrystalSegment(Vec3d from, Vec3d to, double limit) {
-        if (mc.player == null || mc.world == null || from == null || to == null
+    private double evaluateCrystalSegment(Vec3 from, Vec3 to, double limit) {
+        if (mc.player == null || mc.level == null || from == null || to == null
             || !Double.isFinite(from.x) || !Double.isFinite(from.y) || !Double.isFinite(from.z)
             || !Double.isFinite(to.x) || !Double.isFinite(to.y) || !Double.isFinite(to.z)) return Double.POSITIVE_INFINITY;
         if (crystalPolicy.get() == CrystalPolicy.Distance) {
             double clearance = crystalClearance.get();
             if (clearance <= 0) return 0;
-            Vec3d delta = to.subtract(from);
-            double lengthSq = delta.lengthSquared(), worst = 0;
+            Vec3 delta = to.subtract(from);
+            double lengthSq = delta.lengthSqr(), worst = 0;
             for (LanceCrystalSafety.Point point : crystalPositions) {
-                Vec3d source = new Vec3d(point.x(), point.y(), point.z());
-                double t = lengthSq == 0 ? 0 : Math.clamp(source.subtract(from).dotProduct(delta) / lengthSq, 0, 1);
-                worst = Math.max(worst, clearance - from.add(delta.multiply(t)).distanceTo(source));
+                Vec3 source = new Vec3(point.x(), point.y(), point.z());
+                double t = lengthSq == 0 ? 0 : Math.clamp(source.subtract(from).dot(delta) / lengthSq, 0, 1);
+                worst = Math.max(worst, clearance - from.add(delta.scale(t)).distanceTo(source));
             }
             return worst;
         }
         return estimateCrystalSources(from, to, crystalPositions, limit, true);
     }
 
-    private double estimateCrystalSources(Vec3d from, Vec3d to, List<LanceCrystalSafety.Point> sources, double limit, boolean observed) {
+    private double estimateCrystalSources(Vec3 from, Vec3 to, List<LanceCrystalSafety.Point> sources, double limit, boolean observed) {
         if (crystalReductions == null) return Double.POSITIVE_INFINITY;
         return LanceCrystalSafety.estimateSegment(crystalPoint(from), crystalPoint(to), sources, limit,
             new LanceCrystalSafety.DamageModel() {
                 @Override public double reduce(double raw) { return crystalReductions.apply((float) raw); }
 
                 @Override public double exact(LanceCrystalSafety.Point ghost, LanceCrystalSafety.Point source) {
-                    Vec3d feet = new Vec3d(ghost.x(), ghost.y(), ghost.z());
+                    Vec3 feet = new Vec3(ghost.x(), ghost.y(), ghost.z());
                     Double cached = observed ? crystalDamageCache.get(feet) : null;
 
                     if (cached != null) return cached;
                     return DamageUtils.crystalDamage(mc.player, feet, bodyAt(feet),
-                        new Vec3d(source.x(), source.y(), source.z()), DamageUtils.HIT_FACTORY);
+                        new Vec3(source.x(), source.y(), source.z()), DamageUtils.HIT_FACTORY);
                 }
             }).maximumDamage();
     }
 
-    private double positionDamage(Vec3d feet) {
+    private double positionDamage(Vec3 feet) {
         Double cached = crystalDamageCache.get(feet);
         if (cached != null) return cached;
         if (crystalPolicy.get() == CrystalPolicy.Distance) {
@@ -2227,12 +2226,12 @@ public class Lance extends Module {
             crystalDamageCache.put(feet, damage);
             return damage;
         }
-        if (mc.player == null || mc.world == null || crystalReductions == null || feet == null
+        if (mc.player == null || mc.level == null || crystalReductions == null || feet == null
             || !Double.isFinite(feet.x) || !Double.isFinite(feet.y) || !Double.isFinite(feet.z)) return Double.POSITIVE_INFINITY;
         double maximum = 0, limit = damageLimit();
-        Box body = bodyAt(feet);
+        AABB body = bodyAt(feet);
         for (LanceCrystalSafety.Point point : crystalPositions) {
-            Vec3d source = new Vec3d(point.x(), point.y(), point.z());
+            Vec3 source = new Vec3(point.x(), point.y(), point.z());
             double raw = LanceCrystalSafety.rawDamage(feet.distanceTo(source), 1);
             double bound = crystalReductions.apply((float) raw);
             double damage = bound <= limit ? bound
@@ -2250,8 +2249,8 @@ public class Lance extends Module {
         if (cached != null) return cached;
         LanceAttackMath.Point rest = lane.rest(), impact = lane.impact(), axis = lane.axis();
 
-        double damage = segmentDamage(new Vec3d(rest.x(), rest.y(), rest.z()),
-            new Vec3d(impact.x() + axis.x() * 0.3, impact.y() + axis.y() * 0.3, impact.z() + axis.z() * 0.3));
+        double damage = segmentDamage(new Vec3(rest.x(), rest.y(), rest.z()),
+            new Vec3(impact.x() + axis.x() * 0.3, impact.y() + axis.y() * 0.3, impact.z() + axis.z() * 0.3));
         laneDamageCache.put(lane, damage);
         return damage;
     }
@@ -2261,7 +2260,7 @@ public class Lance extends Module {
         Double cached = potentialLaneDamageCache.get(lane);
         if (cached != null) return cached;
 
-        double damage = estimateCrystalSources(vec(lane.rest()), vec(lane.impact()).add(vec(lane.axis()).multiply(0.3)),
+        double damage = estimateCrystalSources(vec(lane.rest()), vec(lane.impact()).add(vec(lane.axis()).scale(0.3)),
             potentialCrystalPositions, maxCrystalDamage.get(), false);
         potentialLaneDamageCache.put(lane, damage);
         return damage;
@@ -2277,35 +2276,35 @@ public class Lance extends Module {
         return LanceLanePolicy.hardLimit(hp(mc.player), maxCrystalDamage.get(), strictCrystalLimit.get());
     }
 
-    private Vec3d crystalRetreat(Vec3d cur, Vec3d real, double leash) {
+    private Vec3 crystalRetreat(Vec3 cur, Vec3 real, double leash) {
         double current = positionDamage(cur);
-        if (!Double.isFinite(current) || damageAllowed(current)) return Vec3d.ZERO;
-        List<Vec3d> directions = new ArrayList<>(12);
-        Vec3d away = Vec3d.ZERO;
+        if (!Double.isFinite(current) || damageAllowed(current)) return Vec3.ZERO;
+        List<Vec3> directions = new ArrayList<>(12);
+        Vec3 away = Vec3.ZERO;
         double nearest = Double.POSITIVE_INFINITY;
         for (LanceCrystalSafety.Point point : crystalPositions) {
-            Vec3d delta = cur.subtract(point.x(), point.y(), point.z());
-            double distance = delta.lengthSquared();
+            Vec3 delta = cur.subtract(point.x(), point.y(), point.z());
+            double distance = delta.lengthSqr();
             if (distance < nearest && distance > 1e-8) { nearest = distance; away = delta.normalize(); }
         }
-        if (away.lengthSquared() > 0) directions.add(away);
-        directions.add(new Vec3d(0, 1, 0));
-        directions.add(new Vec3d(0, -1, 0));
+        if (away.lengthSqr() > 0) directions.add(away);
+        directions.add(new Vec3(0, 1, 0));
+        directions.add(new Vec3(0, -1, 0));
         for (int x = -1; x <= 1; x++) {
             for (int z = -1; z <= 1; z++) {
-                if (x != 0 || z != 0) directions.add(new Vec3d(x, 0, z).normalize());
+                if (x != 0 || z != 0) directions.add(new Vec3(x, 0, z).normalize());
             }
         }
-        Vec3d best = Vec3d.ZERO;
+        Vec3 best = Vec3.ZERO;
         double bestDamage = current;
-        Vec3d relative = cur.subtract(real);
-        for (Vec3d direction : directions) {
-            Vec3d step = capMove(direction.multiply(MAX_H), MAX_H, MAX_V);
+        Vec3 relative = cur.subtract(real);
+        for (Vec3 direction : directions) {
+            Vec3 step = capMove(direction.scale(MAX_H), MAX_H, MAX_V);
             double fraction = LanceMovementMath.followFraction(relative.x, relative.y, relative.z, step.x, step.y, step.z, leash);
-            step = sweepMove(real, cur, step.multiply(fraction));
-            if (step.lengthSquared() < 0.01) continue;
-            Vec3d next = cur.add(step);
-            if (!mc.world.getChunkManager().isChunkLoaded(MathHelper.floor(next.x) >> 4, MathHelper.floor(next.z) >> 4)) continue;
+            step = sweepMove(real, cur, step.scale(fraction));
+            if (step.lengthSqr() < 0.01) continue;
+            Vec3 next = cur.add(step);
+            if (!mc.level.getChunkSource().hasChunk(Mth.floor(next.x) >> 4, Mth.floor(next.z) >> 4)) continue;
             double nextDamage = positionDamage(next);
             if (nextDamage >= bestDamage - 1e-4) continue;
 
@@ -2341,7 +2340,7 @@ public class Lance extends Module {
         closeDebug();
         if (!fileDebug.get()) return;
         try {
-            File dir = new File(mc.runDirectory, "lance-debug");
+            File dir = new File(mc.gameDirectory, "lance-debug");
             dir.mkdirs();
             File f = new File(dir, "lance-" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date()) + ".log");
             dbgOut = new PrintWriter(new BufferedWriter(new FileWriter(f, true)));
@@ -2412,7 +2411,7 @@ public class Lance extends Module {
         private void onSendPost(SendMovementPacketsEvent.Post event) {
             if (!validateBody() || correcting) return;
             boolean claimSent = posSentThisTick && (lastClaim == null
-                || lastWire != null && lastWire.squaredDistanceTo(lastClaim) < 1e-6);
+                || lastWire != null && lastWire.distanceToSqr(lastClaim) < 1e-6);
             if (!claimSent && (lastClaim != null || wireSyncWanted)) sendPos();
             if (lastClaim == null && !wireSyncWanted && ox == 0 && oy == 0 && oz == 0) stopHoming();
         }

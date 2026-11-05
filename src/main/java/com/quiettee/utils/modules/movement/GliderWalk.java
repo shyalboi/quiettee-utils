@@ -13,19 +13,19 @@ import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.MovementType;
-import net.minecraft.entity.data.DataTracker;
-import net.minecraft.item.ItemStack;
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
-import net.minecraft.network.packet.c2s.play.CloseHandledScreenC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerInputC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.network.packet.s2c.play.EntityTrackerUpdateS2CPacket;
-import net.minecraft.util.PlayerInput;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
+import net.minecraft.network.protocol.game.ServerboundContainerClosePacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.player.Input;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.Vec3;
 
 public class GliderWalk extends Module {
     private static final int TRACKED_FLAGS_ID = 0;
@@ -187,7 +187,7 @@ public class GliderWalk extends Module {
     @Override
     public void onActivate() {
         timer = 0;
-        serverGliding = mc.player != null && mc.player.isGliding();
+        serverGliding = mc.player != null && mc.player.isFallFlying();
         announced = false;
         attempts = 0;
         pending = 0;
@@ -196,29 +196,29 @@ public class GliderWalk extends Module {
         airRelights = 0;
 
         chestSlot = -1;
-        spinYaw = mc.player == null ? 0.0F : mc.player.getYaw();
+        spinYaw = mc.player == null ? 0.0F : mc.player.getYRot();
         showTicks = 0;
         if (autoElytra.get() && !hasElytra()) equipElytra();
 
         if (!hasElytra()) warning("no elytra equipped - canGlide() checks your chest slot, so the server will refuse the pose.");
-        else if (mc.player != null && !mc.player.isOnGround()) info("you are in the air - land first. This is a walking trick; it does nothing while you are really flying.");
+        else if (mc.player != null && !mc.player.onGround()) info("you are in the air - land first. This is a walking trick; it does nothing while you are really flying.");
     }
 
     @Override
     public void onDeactivate() {
-        if (mc.player == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.getConnection() == null) return;
 
-        boolean clientFlying = mc.player.isGliding() && !mc.player.isOnGround() && !mc.player.isTouchingWater();
+        boolean clientFlying = mc.player.isFallFlying() && !mc.player.onGround() && !mc.player.isInWater();
 
-        if (serverGliding && !clientFlying) mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
-        if (mc.player.isGliding() && !clientFlying) mc.player.stopGliding();
+        if (serverGliding && !clientFlying) mc.getConnection().send(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
+        if (mc.player.isFallFlying() && !clientFlying) mc.player.stopFallFlying();
         serverGliding = clientFlying && serverGliding;
         pending = 0;
         airRelight = false;
 
         if (spin.get() || bob.get() || pitchLock.get() > -180.5) {
-            mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.LookAndOnGround(
-                mc.player.getYaw(), mc.player.getPitch(), mc.player.isOnGround(), mc.player.horizontalCollision));
+            mc.getConnection().send(new ServerboundMovePlayerPacket.Rot(
+                mc.player.getYRot(), mc.player.getXRot(), mc.player.onGround(), mc.player.horizontalCollision));
         }
 
         if (hideNametag.get()) sendInput(false);
@@ -231,24 +231,24 @@ public class GliderWalk extends Module {
     }
 
     private boolean hasElytra() {
-        return mc.player != null && mc.player.getEquippedStack(EquipmentSlot.CHEST).contains(DataComponentTypes.GLIDER);
+        return mc.player != null && mc.player.getItemBySlot(EquipmentSlot.CHEST).has(DataComponents.GLIDER);
     }
 
     private boolean claiming() {
-        if (mc.player == null || mc.getNetworkHandler() == null) return false;
+        if (mc.player == null || mc.getConnection() == null) return false;
         if (!hasElytra()) return false;
-        if (mc.player.isTouchingWater()) return false;
-        if (mc.player.hasVehicle()) return false;
+        if (mc.player.isInWater()) return false;
+        if (mc.player.isPassenger()) return false;
         return true;
     }
 
     private boolean engaged() {
-        return claiming() && (!onlyOnGround.get() || mc.player.isOnGround());
+        return claiming() && (!onlyOnGround.get() || mc.player.onGround());
     }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        if (mc.player == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.getConnection() == null) return;
 
         sawMove = false;
         airRelight = false;
@@ -258,7 +258,7 @@ public class GliderWalk extends Module {
         if (holdStill.get()) ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
         if (!engaged()) {
 
-            if (showSelf.get() && mc.player.isGliding() && !mc.player.isOnGround() && !serverGliding && pending == 0) {
+            if (showSelf.get() && mc.player.isFallFlying() && !mc.player.onGround() && !serverGliding && pending == 0) {
                 airRelight = true;
                 ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
             }
@@ -271,9 +271,9 @@ public class GliderWalk extends Module {
         }
 
         if (minDurability.get() > 0) {
-            ItemStack chest = mc.player.getEquippedStack(EquipmentSlot.CHEST);
-            if (chest.isDamageable() && chest.getMaxDamage() - chest.getDamage() <= minDurability.get()) {
-                warning("elytra down to %d durability - dropping the pose before it breaks.", chest.getMaxDamage() - chest.getDamage());
+            ItemStack chest = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+            if (chest.isDamageableItem() && chest.getMaxDamage() - chest.getDamageValue() <= minDurability.get()) {
+                warning("elytra down to %d durability - dropping the pose before it breaks.", chest.getMaxDamage() - chest.getDamageValue());
                 toggle();
                 return;
             }
@@ -282,19 +282,19 @@ public class GliderWalk extends Module {
         if (holdStill.get()) ((ClientPlayerEntityAccessor) mc.player).meteor$setTicksSinceLastPositionPacketSent(20);
 
         showTicks++;
-        if (spin.get()) spinYaw = MathHelper.wrapDegrees(spinYaw + spinSpeed.get().floatValue());
+        if (spin.get()) spinYaw = Mth.wrapDegrees(spinYaw + spinSpeed.get().floatValue());
 
         if (hideNametag.get() && timer % 10 == 0) sendInput(true);
 
-        if (!showSelf.get() && mc.player.isGliding()) mc.player.stopGliding();
+        if (!showSelf.get() && mc.player.isFallFlying()) mc.player.stopFallFlying();
     }
 
     private void light() {
-        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
+        mc.getConnection().send(new ServerboundMovePlayerPacket.PosRot(
             mc.player.getX(), mc.player.getY(), mc.player.getZ(),
-            mc.player.getYaw(), mc.player.getPitch(), false, mc.player.horizontalCollision));
+            mc.player.getYRot(), mc.player.getXRot(), false, mc.player.horizontalCollision));
 
-        mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+        mc.getConnection().send(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
 
         if (++attempts == 8 && !serverGliding && notify.get()) {
             warning("the server keeps refusing the pose - check you have an elytra on, are not in water or a vehicle, and that NoFall's ground spoof is off (it claims the opposite flag).");
@@ -303,9 +303,9 @@ public class GliderWalk extends Module {
 
     @EventHandler
     private void onReceive(PacketEvent.Receive event) {
-        if (mc.player == null || !(event.packet instanceof EntityTrackerUpdateS2CPacket p) || p.id() != mc.player.getId()) return;
+        if (mc.player == null || !(event.packet instanceof ClientboundSetEntityDataPacket p) || p.id() != mc.player.getId()) return;
 
-        for (DataTracker.SerializedEntry<?> entry : p.trackedValues()) {
+        for (SynchedEntityData.DataValue<?> entry : p.packedItems()) {
             if (entry.id() == TRACKED_FLAGS_ID && entry.value() instanceof Byte b) {
                 boolean now = (b & GLIDING_BIT) != 0;
                 if (now && !serverGliding && !announced && notify.get()) {
@@ -321,28 +321,28 @@ public class GliderWalk extends Module {
 
     @EventHandler
     private void onTickPost(TickEvent.Post event) {
-        if (!airRelight || mc.player == null || mc.getNetworkHandler() == null) return;
+        if (!airRelight || mc.player == null || mc.getConnection() == null) return;
         airRelight = false;
         if (!sawMove) return;
 
-        mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+        mc.getConnection().send(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
         airRelights++;
         if (notify.get() && airRelights <= 3) info("the server dropped your wings mid-air - re-opened them (#%d).", airRelights);
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     private void onPlayerMove(PlayerMoveEvent event) {
-        if (!groundFly.get() || event.type != MovementType.SELF || !engaged()) return;
-        if (mc.currentScreen != null) return;
+        if (!groundFly.get() || event.type != MoverType.SELF || !engaged()) return;
+        if (mc.screen != null) return;
 
-        Vec3d fwd = Vec3d.fromPolar(0, mc.player.getYaw());
-        Vec3d rgt = Vec3d.fromPolar(0, mc.player.getYaw() + 90);
+        Vec3 fwd = Vec3.directionFromRotation(0, mc.player.getYRot());
+        Vec3 rgt = Vec3.directionFromRotation(0, mc.player.getYRot() + 90);
 
         double fx = 0, fz = 0;
-        if (mc.options.forwardKey.isPressed()) { fx += fwd.x; fz += fwd.z; }
-        if (mc.options.backKey.isPressed())    { fx -= fwd.x; fz -= fwd.z; }
-        if (mc.options.rightKey.isPressed())   { fx += rgt.x; fz += rgt.z; }
-        if (mc.options.leftKey.isPressed())    { fx -= rgt.x; fz -= rgt.z; }
+        if (mc.options.keyUp.isDown()) { fx += fwd.x; fz += fwd.z; }
+        if (mc.options.keyDown.isDown())    { fx -= fwd.x; fz -= fwd.z; }
+        if (mc.options.keyRight.isDown())   { fx += rgt.x; fz += rgt.z; }
+        if (mc.options.keyLeft.isDown())    { fx -= rgt.x; fz -= rgt.z; }
 
         double len = Math.sqrt(fx * fx + fz * fz);
         if (len < 1e-6) return;
@@ -352,14 +352,14 @@ public class GliderWalk extends Module {
     }
 
     private void sendInput(boolean sneak) {
-        if (mc.player == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.getConnection() == null) return;
 
         rewritingInput = true;
         try {
-            mc.getNetworkHandler().sendPacket(new PlayerInputC2SPacket(new PlayerInput(
-                mc.options.forwardKey.isPressed(), mc.options.backKey.isPressed(),
-                mc.options.leftKey.isPressed(), mc.options.rightKey.isPressed(),
-                mc.options.jumpKey.isPressed(), sneak, mc.options.sprintKey.isPressed())));
+            mc.getConnection().send(new ServerboundPlayerInputPacket(new Input(
+                mc.options.keyUp.isDown(), mc.options.keyDown.isDown(),
+                mc.options.keyLeft.isDown(), mc.options.keyRight.isDown(),
+                mc.options.keyJump.isDown(), sneak, mc.options.keySprint.isDown())));
         }
         finally {
             rewritingInput = false;
@@ -367,11 +367,11 @@ public class GliderWalk extends Module {
     }
 
     private void equipElytra() {
-        for (int i = 0; i < mc.player.getInventory().getMainStacks().size(); i++) {
-            if (mc.player.getInventory().getMainStacks().get(i).contains(DataComponentTypes.GLIDER)) {
+        for (int i = 0; i < mc.player.getInventory().getNonEquipmentItems().size(); i++) {
+            if (mc.player.getInventory().getNonEquipmentItems().get(i).has(DataComponents.GLIDER)) {
                 chestSlot = i;
                 InvUtils.move().from(i).toArmor(2);
-                mc.getNetworkHandler().sendPacket(new CloseHandledScreenC2SPacket(0));
+                mc.getConnection().send(new ServerboundContainerClosePacket(0));
                 return;
             }
         }
@@ -379,45 +379,45 @@ public class GliderWalk extends Module {
     }
 
     private void restoreChest() {
-        if (chestSlot < 0 || chestSlot >= mc.player.getInventory().getMainStacks().size()) return;
-        ItemStack back = mc.player.getInventory().getMainStacks().get(chestSlot);
-        if (back.isEmpty() || back.contains(DataComponentTypes.GLIDER)) return;
+        if (chestSlot < 0 || chestSlot >= mc.player.getInventory().getNonEquipmentItems().size()) return;
+        ItemStack back = mc.player.getInventory().getNonEquipmentItems().get(chestSlot);
+        if (back.isEmpty() || back.has(DataComponents.GLIDER)) return;
 
         InvUtils.move().from(chestSlot).toArmor(2);
-        mc.getNetworkHandler().sendPacket(new CloseHandledScreenC2SPacket(0));
+        mc.getConnection().send(new ServerboundContainerClosePacket(0));
         chestSlot = -1;
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     private void onSend(PacketEvent.Send event) {
 
-        if (event.packet instanceof ClientCommandC2SPacket c && c.getMode() == ClientCommandC2SPacket.Mode.START_FALL_FLYING) {
+        if (event.packet instanceof ServerboundPlayerCommandPacket c && c.getAction() == ServerboundPlayerCommandPacket.Action.START_FALL_FLYING) {
             pending = echoWait();
             return;
         }
 
-        if (hideNametag.get() && !rewritingInput && event.packet instanceof PlayerInputC2SPacket in && claiming()) {
-            PlayerInput i = in.input();
-            if (!i.sneak()) {
+        if (hideNametag.get() && !rewritingInput && event.packet instanceof ServerboundPlayerInputPacket in && claiming()) {
+            Input i = in.input();
+            if (!i.shift()) {
                 event.cancel();
                 sendInput(true);
             }
             return;
         }
 
-        if (!(event.packet instanceof PlayerMoveC2SPacket p) || !claiming()) return;
+        if (!(event.packet instanceof ServerboundMovePlayerPacket p) || !claiming()) return;
         ((PlayerMoveC2SPacketAccessor) p).quiettee$setOnGround(false);
-        if (p.changesPosition()) sawMove = true;
+        if (p.hasPosition()) sawMove = true;
 
         boolean lockPitch = pitchLock.get() > -180.5;
         if ((spin.get() || bob.get() || lockPitch) && !rewritingMove) {
-            float yaw = spin.get() ? spinYaw : mc.player.getYaw();
+            float yaw = spin.get() ? spinYaw : mc.player.getYRot();
             float pitch;
             if (bob.get()) pitch = (float) (Math.sin(showTicks * bobSpeed.get()) * bobRange.get());
             else if (lockPitch) pitch = pitchLock.get().floatValue();
-            else pitch = mc.player.getPitch();
+            else pitch = mc.player.getXRot();
 
-            if (p.changesLook()) {
+            if (p.hasRotation()) {
                 ((PlayerMoveC2SPacketAccessor) p).quiettee$setYaw(yaw);
                 ((PlayerMoveC2SPacketAccessor) p).quiettee$setPitch(pitch);
             }
@@ -425,10 +425,10 @@ public class GliderWalk extends Module {
                 event.cancel();
                 rewritingMove = true;
                 try {
-                    PlayerMoveC2SPacket full = new PlayerMoveC2SPacket.Full(
+                    ServerboundMovePlayerPacket full = new ServerboundMovePlayerPacket.PosRot(
                         mc.player.getX(), mc.player.getY(), mc.player.getZ(),
                         yaw, pitch, false, mc.player.horizontalCollision);
-                    mc.getNetworkHandler().sendPacket(full);
+                    mc.getConnection().send(full);
                 }
                 finally {
                     rewritingMove = false;
@@ -441,7 +441,7 @@ public class GliderWalk extends Module {
     public String getInfoString() {
         if (mc.player == null) return null;
         if (!hasElytra()) return "no elytra";
-        if (onlyOnGround.get() && !mc.player.isOnGround()) return "land first";
+        if (onlyOnGround.get() && !mc.player.onGround()) return "land first";
         return serverGliding ? "soaring" : "lighting";
     }
 }

@@ -13,19 +13,18 @@ import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.component.type.ChargedProjectilesComponent;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.ArrowItem;
-import net.minecraft.item.CrossbowItem;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.util.Hand;
-import net.minecraft.util.math.Vec3d;
-
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ArrowItem;
+import net.minecraft.world.item.CrossbowItem;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.ChargedProjectiles;
+import net.minecraft.world.phys.Vec3;
 import java.util.Arrays;
 import java.util.Set;
 
@@ -205,7 +204,7 @@ public class Fusillade extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        if (mc.player == null || mc.world == null) return;
+        if (mc.player == null || mc.level == null) return;
         if (useCooldown > 0) useCooldown--;
 
         if (firing) {
@@ -213,12 +212,12 @@ public class Fusillade extends Module {
             return;
         }
 
-        if (mc.currentScreen != null) {
+        if (mc.screen != null) {
             if (phase != Phase.IDLE) stopCharging();
             return;
         }
 
-        if (fireOnUse.get() && useCooldown == 0 && phase == Phase.IDLE && mc.options.useKey.isPressed() && isLive(selectedSlot())) {
+        if (fireOnUse.get() && useCooldown == 0 && phase == Phase.IDLE && mc.options.keyUse.isDown() && isLive(selectedSlot())) {
             startVolley(true);
             return;
         }
@@ -273,10 +272,10 @@ public class Fusillade extends Module {
                 }
                 hold(true);
                 phaseTicks++;
-                int need = CrossbowItem.getPullTime(stack(chargeSlot), mc.player) + chargeSlack.get();
+                int need = CrossbowItem.getChargeDuration(stack(chargeSlot), mc.player) + chargeSlack.get();
                 if (phaseTicks >= need) {
                     hold(false);
-                    mc.interactionManager.stopUsingItem(mc.player);
+                    mc.gameMode.releaseUsingItem(mc.player);
                     phase = Phase.VERIFY;
                     phaseTicks = 0;
                 }
@@ -304,7 +303,7 @@ public class Fusillade extends Module {
 
     private void stopCharging() {
         hold(false);
-        if (phase == Phase.HOLD && mc.player != null && mc.player.isUsingItem()) mc.interactionManager.stopUsingItem(mc.player);
+        if (phase == Phase.HOLD && mc.player != null && mc.player.isUsingItem()) mc.gameMode.releaseUsingItem(mc.player);
         phase = Phase.IDLE;
         gapTicks = chargeGap.get();
     }
@@ -327,12 +326,12 @@ public class Fusillade extends Module {
 
     private void hold(boolean pressed) {
         if (pressed == keyHeld) return;
-        mc.options.useKey.setPressed(pressed);
+        mc.options.keyUse.setDown(pressed);
         keyHeld = pressed;
     }
 
     private void startVolley(boolean fromUse) {
-        if (firing || mc.player == null || mc.world == null) return;
+        if (firing || mc.player == null || mc.level == null) return;
         if (phase != Phase.IDLE) stopCharging();
 
         queue.clear();
@@ -340,7 +339,7 @@ public class Fusillade extends Module {
 
         if (!fromUse && isLive(sel)) queue.add(sel);
         for (int i = 0; i < 9 && queue.size() < burst.get(); i++) if (i != sel && isLive(i)) queue.add(i);
-        if (fromUse) spentUntil[sel] = mc.world.getTime() + 20;
+        if (fromUse) spentUntil[sel] = mc.level.getGameTime() + 20;
 
         if (queue.isEmpty()) {
             if (fromUse) useCooldown = 10;
@@ -386,7 +385,7 @@ public class Fusillade extends Module {
     }
 
     private void fire(int n) {
-        if (mc.player == null || mc.world == null) {
+        if (mc.player == null || mc.level == null) {
             firing = false;
             queue.clear();
             return;
@@ -396,8 +395,8 @@ public class Fusillade extends Module {
             int slot = queue.removeInt(0);
             if (!isLive(slot)) continue;
             InvUtils.swap(slot, false);
-            mc.interactionManager.interactItem(mc.player, Hand.MAIN_HAND);
-            spentUntil[slot] = mc.world.getTime() + 20;
+            mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+            spentUntil[slot] = mc.level.getGameTime() + 20;
             shots++;
             bolts += boltCount(stack(slot));
             k++;
@@ -417,11 +416,11 @@ public class Fusillade extends Module {
     private Entity findTarget() {
         return TargetUtils.get(entity -> {
             if (entity == mc.player || entity == mc.getCameraEntity()) return false;
-            if (!entity.isAlive() || (entity instanceof LivingEntity living && living.isDead())) return false;
+            if (!entity.isAlive() || (entity instanceof LivingEntity living && living.isDeadOrDying())) return false;
             if (!PlayerUtils.isWithin(entity, range.get())) return false;
             if (!entities.get().contains(entity.getType())) return false;
             if (!PlayerUtils.canSeeEntity(entity)) return false;
-            if (entity instanceof PlayerEntity player) {
+            if (entity instanceof Player player) {
                 if (player.isCreative()) return false;
                 return Friends.get().shouldAttack(player);
             }
@@ -430,7 +429,7 @@ public class Fusillade extends Module {
     }
 
     private double[] solve(Entity target) {
-        Vec3d pos = target.getEntityPos().add(0, target.getHeight() * 0.5, 0);
+        Vec3 pos = target.position().add(0, target.getBbHeight() * 0.5, 0);
         double dx = pos.x - mc.player.getX();
         double dz = pos.z - mc.player.getZ();
         double dy = pos.y - mc.player.getEyeY();
@@ -442,7 +441,7 @@ public class Fusillade extends Module {
         if (aim.get() == Aim.Ballistic && h > 0.01) {
             boolean fireworks = false;
             for (int i = 0; i < queue.size(); i++) {
-                ChargedProjectilesComponent c = stack(queue.getInt(i)).get(DataComponentTypes.CHARGED_PROJECTILES);
+                ChargedProjectiles c = stack(queue.getInt(i)).get(DataComponents.CHARGED_PROJECTILES);
                 if (c != null && !c.isEmpty()) {
                     fireworks = c.contains(Items.FIREWORK_ROCKET);
                     break;
@@ -463,7 +462,7 @@ public class Fusillade extends Module {
     }
 
     private ItemStack stack(int slot) {
-        return mc.player.getInventory().getStack(slot);
+        return mc.player.getInventory().getItem(slot);
     }
 
     private boolean isCrossbow(int slot) {
@@ -471,17 +470,17 @@ public class Fusillade extends Module {
     }
 
     private boolean isLive(int slot) {
-        return isCrossbow(slot) && CrossbowItem.isCharged(stack(slot)) && mc.world.getTime() >= spentUntil[slot];
+        return isCrossbow(slot) && CrossbowItem.isCharged(stack(slot)) && mc.level.getGameTime() >= spentUntil[slot];
     }
 
     private boolean hasAmmo() {
-        return mc.player.getAbilities().creativeMode
-            || InvUtils.find(s -> s.getItem() instanceof ArrowItem || s.isOf(Items.FIREWORK_ROCKET)).found();
+        return mc.player.getAbilities().instabuild
+            || InvUtils.find(s -> s.getItem() instanceof ArrowItem || s.is(Items.FIREWORK_ROCKET)).found();
     }
 
     private static int boltCount(ItemStack crossbow) {
-        ChargedProjectilesComponent c = crossbow.get(DataComponentTypes.CHARGED_PROJECTILES);
-        return c == null ? 0 : c.getProjectiles().size();
+        ChargedProjectiles c = crossbow.get(DataComponents.CHARGED_PROJECTILES);
+        return c == null ? 0 : c.getItems().size();
     }
 
     @Override

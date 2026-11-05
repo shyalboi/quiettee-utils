@@ -5,26 +5,26 @@ import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import meteordevelopment.meteorclient.utils.Utils;
 import meteordevelopment.meteorclient.utils.entity.EntityUtils;
 import meteordevelopment.meteorclient.utils.entity.fakeplayer.FakePlayerEntity;
-import net.minecraft.component.type.AttributeModifierSlot;
-import net.minecraft.enchantment.Enchantment;
-import net.minecraft.enchantment.Enchantments;
-import net.minecraft.entity.DamageUtil;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.damage.DamageSource;
-import net.minecraft.entity.effect.StatusEffectInstance;
-import net.minecraft.entity.effect.StatusEffects;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.registry.entry.RegistryEntry;
-import net.minecraft.registry.tag.DamageTypeTags;
-import net.minecraft.world.GameMode;
+import net.minecraft.core.Holder;
+import net.minecraft.tags.DamageTypeTags;
+import net.minecraft.world.damagesource.CombatRules;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.EquipmentSlotGroup;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.GameType;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 
 public final class ExplosionReductions {
-    private static final Object2IntMap<RegistryEntry<Enchantment>> enchantmentsScratch = new Object2IntOpenHashMap<>();
+    private static final Object2IntMap<Holder<Enchantment>> enchantmentsScratch = new Object2IntOpenHashMap<>();
 
     private final LivingEntity target;
     private final boolean immune;
@@ -35,17 +35,17 @@ public final class ExplosionReductions {
     private ExplosionReductions(LivingEntity target) {
         this.target = target;
 
-        immune = target instanceof PlayerEntity player && EntityUtils.getGameMode(player) == GameMode.CREATIVE && !(player instanceof FakePlayerEntity);
-        armor = (float) Math.floor(target.getAttributeValue(EntityAttributes.ARMOR));
-        toughness = (float) target.getAttributeValue(EntityAttributes.ARMOR_TOUGHNESS);
+        immune = target instanceof Player player && EntityUtils.getGameMode(player) == GameType.CREATIVE && !(player instanceof FakePlayerEntity);
+        armor = (float) Math.floor(target.getAttributeValue(Attributes.ARMOR));
+        toughness = (float) target.getAttributeValue(Attributes.ARMOR_TOUGHNESS);
 
-        StatusEffectInstance resistance = target.getStatusEffect(StatusEffects.RESISTANCE);
+        MobEffectInstance resistance = target.getEffect(MobEffects.RESISTANCE);
         resistanceFactor = resistance == null ? 1 : (1 - (resistance.getAmplifier() + 1) * 0.2f);
 
         int damageProtection = 0;
-        if (!explosionSource().isIn(DamageTypeTags.BYPASSES_INVULNERABILITY)) {
-            for (EquipmentSlot slot : AttributeModifierSlot.ARMOR) {
-                ItemStack stack = target.getEquippedStack(slot);
+        if (!explosionSource().is(DamageTypeTags.BYPASSES_INVULNERABILITY)) {
+            for (EquipmentSlot slot : EquipmentSlotGroup.ARMOR) {
+                ItemStack stack = target.getItemBySlot(slot);
                 Utils.getEnchantments(stack, enchantmentsScratch);
 
                 int prot = Utils.getEnchantmentLevel(enchantmentsScratch, Enchantments.PROTECTION);
@@ -63,7 +63,7 @@ public final class ExplosionReductions {
     }
 
     private static DamageSource explosionSource() {
-        return mc.world.getDamageSources().explosion(null);
+        return mc.level.damageSources().explosion(null);
     }
 
     public float apply(float damage) {
@@ -71,17 +71,17 @@ public final class ExplosionReductions {
 
         DamageSource source = explosionSource();
 
-        if (source.isScaledWithDifficulty()) {
-            switch (mc.world.getDifficulty()) {
+        if (source.scalesWithDifficulty()) {
+            switch (mc.level.getDifficulty()) {
                 case EASY -> damage = Math.min(damage / 2 + 1, damage);
                 case HARD -> damage *= 1.5f;
                 default -> { }
             }
         }
 
-        damage = DamageUtil.getDamageLeft(target, damage, source, armor, toughness);
+        damage = CombatRules.getDamageAfterAbsorb(target, damage, source, armor, toughness);
         damage = Math.max(damage * resistanceFactor, 0);
-        damage = DamageUtil.getInflictedDamage(damage, protection);
+        damage = CombatRules.getDamageAfterMagicAbsorb(damage, protection);
 
         return Math.max(damage, 0);
     }

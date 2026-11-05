@@ -28,30 +28,36 @@ import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.world.TickRate;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.client.gui.screen.ingame.InventoryScreen;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.decoration.ArmorStandEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.projectile.PersistentProjectileEntity;
-import net.minecraft.entity.vehicle.AbstractBoatEntity;
-import net.minecraft.item.BowItem;
-import net.minecraft.item.ItemStack;
-import net.minecraft.network.ClientConnection;
-import net.minecraft.network.packet.c2s.play.*;
-import net.minecraft.network.packet.s2c.play.EntitySpawnS2CPacket;
-import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
-import net.minecraft.network.packet.s2c.play.VehicleMoveS2CPacket;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.HitResult;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Vec3d;
-import net.minecraft.world.RaycastContext;
-
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.game.*;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundMoveVehiclePacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ServerboundInteractPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundMoveVehiclePacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
+import net.minecraft.world.entity.vehicle.boat.AbstractBoat;
+import net.minecraft.world.item.BowItem;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
@@ -212,28 +218,28 @@ public final class BoatShot extends Module {
     private final BoatShotPrediction prediction = new BoatShotPrediction();
     private final BoatShotDrawLock drawLock = new BoatShotDrawLock();
     private final AtomicBoolean corrected = new AtomicBoolean();
-    private final ConcurrentLinkedQueue<EntitySpawnS2CPacket> spawns = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<ClientboundAddEntityPacket> spawns = new ConcurrentLinkedQueue<>();
     private final Map<Integer, Integer> arrows = new LinkedHashMap<>();
     private final Map<Integer,Boolean> seenArrows = new LinkedHashMap<>();
-    private ClientPlayerEntity player;
-    private ClientWorld world;
-    private ClientPlayNetworkHandler network;
-    private volatile ClientConnection connection;
-    private AbstractBoatEntity boat;
+    private LocalPlayer player;
+    private ClientLevel world;
+    private ClientPacketListener network;
+    private volatile Connection connection;
+    private AbstractBoat boat;
     private BoatPhase phase;
     private boolean enabledPhase, sendingRelease, lookSent, releaseSent, automaticReleasing, queuedAutomatic;
-    private Vec3d shotEyeOffset = Vec3d.ZERO;
+    private Vec3 shotEyeOffset = Vec3.ZERO;
     private int queuedAt;
     private int tick, slot, drawTicks, releaseTick, shotArrow = -1;
     private int lastBoostTick = -100;
     private double lastBoost;
     private volatile int playerId = -1;
     private float shotYaw, shotPitch;
-    private Vec3d lastWire, shotOrigin;
+    private Vec3 lastWire, shotOrigin;
     private LivingEntity target;
-    private Vec3d targetPosition, targetVelocity = Vec3d.ZERO;
-    private PlayerActionC2SPacket pending;
-    private PlayerMoveC2SPacket primePacket, lookPacket;
+    private Vec3 targetPosition, targetVelocity = Vec3.ZERO;
+    private ServerboundPlayerActionPacket pending;
+    private ServerboundMovePlayerPacket primePacket, lookPacket;
     private ItemStack shotStack = ItemStack.EMPTY;
     private String status = "enable before boarding";
     private PrintWriter log;
@@ -245,7 +251,7 @@ public final class BoatShot extends Module {
     private boolean ownedAutoDraw, suppressAcquire;
     private boolean powerRejected;
     private double escapeY=Double.NaN;
-    private Vec3d escapeAway=Vec3d.ZERO;
+    private Vec3 escapeAway=Vec3.ZERO;
     private int escapeUntil, chargeRequired;
     private String lastFlow="";
     private boolean coverMode;
@@ -269,16 +275,16 @@ public final class BoatShot extends Module {
     private boolean follows() { return autoCombat.get() || follow.get(); }
     private boolean aimEnabled() { return autoCombat.get() || autoAim.get(); }
     private boolean persistentLock() { return autoCombat.get() || lockTarget.get(); }
-    public boolean retainAutomaticDraw(PlayerEntity owner) {
+    public boolean retainAutomaticDraw(Player owner) {
         return BoatShotAutomation.retainDraw(ownedAutoDraw, owner==player && player!=null && player.isUsingItem()
-            && player.getActiveHand()==Hand.MAIN_HAND && player.getActiveItem().getItem() instanceof BowItem,
-            driving() && automaticFiring() && mc.currentScreen==null && !manualMovement() && !web.busy()
+            && player.getUsedItemHand()==InteractionHand.MAIN_HAND && player.getUseItem().getItem() instanceof BowItem,
+            driving() && automaticFiring() && mc.screen==null && !manualMovement() && !web.busy()
                 && !Double.isFinite(escapeY) && validTarget(target), automaticReleasing || sendingRelease);
     }
     private void acquiredTarget() {
         if(target==null)return;
         web.rearm(); navigator.reset();
-        if(autoCombat.get() && !(player.getMainHandStack().getItem() instanceof BowItem)) {
+        if(autoCombat.get() && !(player.getMainHandItem().getItem() instanceof BowItem)) {
             var bow=InvUtils.findInHotbar(stack->stack.getItem() instanceof BowItem);
             if(bow.isHotbar())InvUtils.swap(bow.slot(),false);
         }
@@ -292,7 +298,7 @@ public final class BoatShot extends Module {
     }
     private boolean webEligible() {
         return targetPosition!=null && world!=null && phase!=null
-            && BoatShotAutomation.cubeFits((int)Math.floor(targetPosition.y),world.getBottomY(),world.getTopYInclusive())
+            && BoatShotAutomation.cubeFits((int)Math.floor(targetPosition.y),world.getMinY(),world.getMaxY())
             && Math.floor(targetPosition.y)+BoatShotWebShape.HOVER<=phase.captureCeiling(boat);
     }
     private int bowTicks(int clientTicks) {
@@ -307,16 +313,16 @@ public final class BoatShot extends Module {
         return powerRejected?Math.min(9.9,burstSpeed.get()):powerShots.get()?Math.max(burstSpeed.get(),powerShotSpeed.get()):burstSpeed.get();
     }
     private void stopAutomaticDraw() {
-        if(ownedAutoDraw && sameSession() && player.isUsingItem() && player.getActiveItem().getItem() instanceof BowItem) {
-            cancelDraw(); player.clearActiveItem();
+        if(ownedAutoDraw && sameSession() && player.isUsingItem() && player.getUseItem().getItem() instanceof BowItem) {
+            cancelDraw(); player.stopUsingItem();
         }
         ownedAutoDraw=false;
     }
     private void unlockTarget() {
         if(!isActive())return;
         stopAutomaticDraw(); abort("target unlocked",true);
-        if(sameSession() && player.isUsingItem() && player.getActiveItem().getItem() instanceof BowItem) { cancelDraw(); player.clearActiveItem(); }
-        target=null; targetPosition=null; targetVelocity=Vec3d.ZERO; prediction.resetMotion();
+        if(sameSession() && player.isUsingItem() && player.getUseItem().getItem() instanceof BowItem) { cancelDraw(); player.stopUsingItem(); }
+        target=null; targetPosition=null; targetVelocity=Vec3.ZERO; prediction.resetMotion();
         web.retreat(); navigator.reset(); resetCover(); suppressAcquire=true;
         escapeY=Double.NaN;
         info("Target unlocked; automatic firing stopped.");
@@ -326,7 +332,7 @@ public final class BoatShot extends Module {
         if(target!=null) { unlockTarget(); return; }
         if(web.busy() || cycle.stage()!=BoatShotCycle.Stage.IDLE || Double.isFinite(escapeY))return;
         target=chooseTarget(); targetPosition=target==null?null:observedPosition(target);
-        targetVelocity=Vec3d.ZERO; prediction.resetMotion();
+        targetVelocity=Vec3.ZERO; prediction.resetMotion();
         acquiredTarget();
     }
 
@@ -351,7 +357,7 @@ public final class BoatShot extends Module {
     @EventHandler private void onGameLeft(GameLeftEvent event) { resetSession(); restoreConflicts(); }
 
     private boolean sameSession() {
-        return player != null && player == mc.player && world == mc.world && network == mc.getNetworkHandler()
+        return player != null && player == mc.player && world == mc.level && network == mc.getConnection()
             && network.getConnection() == connection;
     }
 
@@ -362,19 +368,19 @@ public final class BoatShot extends Module {
 
     private boolean sameBow() {
         return sameSession() && player.isAlive() && player.getInventory().getSelectedSlot() == slot
-            && ItemStack.areItemsAndComponentsEqual(shotStack, player.getMainHandStack());
+            && ItemStack.isSameItemSameComponents(shotStack, player.getMainHandItem());
     }
 
     @EventHandler(priority = EventPriority.HIGHEST - 1)
     private void onTick(TickEvent.Pre event) {
-        if (mc.player != null && !eventGate.tick(mc.player, mc.player.age)) return;
+        if (mc.player != null && !eventGate.tick(mc.player, mc.player.tickCount)) return;
         if (!sameSession()) {
             restoreConflicts();
             resetSession();
-            if (mc.player == null || mc.world == null || mc.getNetworkHandler() == null) return;
+            if (mc.player == null || mc.level == null || mc.getConnection() == null) return;
             player = mc.player;
-            world = mc.world;
-            network = mc.getNetworkHandler();
+            world = mc.level;
+            network = mc.getConnection();
             connection = network.getConnection();
             playerId = player.getId();
             openLog();
@@ -382,7 +388,7 @@ public final class BoatShot extends Module {
         tick++;
         if (corrected.getAndSet(false)) {
             stopAutomaticDraw();
-            if (boat != null && lastBoost >= 10 && tick - lastBoostTick <= 12 && !Input.isPressed(mc.options.sneakKey)) {
+            if (boat != null && lastBoost >= 10 && tick - lastBoostTick <= 12 && !Input.isPressed(mc.options.keyShift)) {
                 powerRejected=true;
                 warning("Correction after a %.1f-block burst. Shot power reduced to 9.9 until reboarding.", lastBoost);
                 record("BURST-CORRECTION tick=%d attempted=%.3f", tick, lastBoost);
@@ -394,7 +400,7 @@ public final class BoatShot extends Module {
             if (boat != null) record("CORRECTION tick=%d seat=%s; the rider's ground flag is untouched by corrections", tick, boat.getId());
             lastWire = null;
         }
-        AbstractBoatEntity current = player.getRootVehicle() instanceof AbstractBoatEntity b
+        AbstractBoat current = player.getRootVehicle() instanceof AbstractBoat b
             && b.getControllingPassenger() == player ? b : null;
         if (current != boat) {
             stopAutomaticDraw();
@@ -402,7 +408,7 @@ public final class BoatShot extends Module {
             web.cancel(); navigator.reset(); resetCover();
             target = null;
             targetPosition = null;
-            targetVelocity = Vec3d.ZERO;
+            targetVelocity = Vec3.ZERO;
             prediction.resetMotion();
             boat = current;
             escapeY=Double.NaN;
@@ -422,14 +428,14 @@ public final class BoatShot extends Module {
         updateCover();
         pauseConflicts();
         if (cycle.stage() != BoatShotCycle.Stage.IDLE && (phase == null || !phase.shotReady(boat))) abort("Boat Phase paused", true);
-        if (pending != null && (!sameBow() || cycle.expired(tick) || mc.currentScreen != null
-            || Input.isPressed(mc.options.sneakKey) || queuedAutomatic && manualMovement() || phase == null || !phase.shotReady(boat))) abort("shot interrupted", true);
-        if (cycle.stage() == BoatShotCycle.Stage.RETURNING && (manualMovement() || mc.currentScreen != null)) abort("return canceled", false);
+        if (pending != null && (!sameBow() || cycle.expired(tick) || mc.screen != null
+            || Input.isPressed(mc.options.keyShift) || queuedAutomatic && manualMovement() || phase == null || !phase.shotReady(boat))) abort("shot interrupted", true);
+        if (cycle.stage() == BoatShotCycle.Stage.RETURNING && (manualMovement() || mc.screen != null)) abort("return canceled", false);
         if (cycle.stage() == BoatShotCycle.Stage.IDLE) status = phase == null || !phase.isActive()
             ? "enable Boat Phase" : mount.ready() ? target == null ? "ready" : "locked: " + target.getName().getString() : "reboard with Boat Shot enabled";
         String capturePause = Double.isFinite(escapeY) ? "retreating from height limit" : !follows() ? "follow is off" : !aimEnabled() ? "auto aim is off"
-            : !(player.getMainHandStack().getItem() instanceof BowItem) ? "select the bow"
-            : manualMovement() ? "manual steering" : mc.currentScreen != null ? "screen open"
+            : !(player.getMainHandItem().getItem() instanceof BowItem) ? "select the bow"
+            : manualMovement() ? "manual steering" : mc.screen != null ? "screen open"
             : cycle.stage()!=BoatShotCycle.Stage.IDLE ? "shot in progress"
             : phase==null || !phase.shotReady(boat) ? "Boat Phase paused" : !mount.ready() ? "reboard to prime"
             : tick<nextAutoTick ? "shot delay" : null;
@@ -446,67 +452,67 @@ public final class BoatShot extends Module {
 
     private boolean manualMovement() {
         if(inventoryFollowAllowed())return false;
-        return Input.isPressed(mc.options.forwardKey) || Input.isPressed(mc.options.backKey)
-            || Input.isPressed(mc.options.leftKey) || Input.isPressed(mc.options.rightKey)
-            || Input.isPressed(mc.options.jumpKey) || Input.isPressed(mc.options.sprintKey)
-            || Input.isPressed(mc.options.sneakKey);
+        return Input.isPressed(mc.options.keyUp) || Input.isPressed(mc.options.keyDown)
+            || Input.isPressed(mc.options.keyLeft) || Input.isPressed(mc.options.keyRight)
+            || Input.isPressed(mc.options.keyJump) || Input.isPressed(mc.options.keySprint)
+            || Input.isPressed(mc.options.keyShift);
     }
 
     public boolean inventoryFollowAllowed() {
-        return followInventory.get() && mc.currentScreen instanceof InventoryScreen
+        return followInventory.get() && mc.screen instanceof InventoryScreen
             && follows() && aimEnabled() && driving() && validTarget(target);
     }
 
     private void checkCeiling() {
-        if(!follows() || !validTarget(target) || phase==null || !phase.shotReady(boat) || manualMovement() || mc.currentScreen!=null)return;
-        Box body=observedTargetBox();
+        if(!follows() || !validTarget(target) || phase==null || !phase.shotReady(boat) || manualMovement() || mc.screen!=null)return;
+        AABB body=observedTargetBox();
         if(!BoatShotAutomation.ceilingDanger(boat.getY(),body.minY,body.maxY,phase.captureCeiling(boat),shotBurst()+6))return;
         stopAutomaticDraw(); abort("enemy above at height limit",true); web.cancel(); navigator.reset();
-        escapeY=Math.max(world.getBottomY()+2,boat.getY()-45);escapeUntil=tick+100;
-        escapeAway=boat.getEntityPos().subtract(targetPosition).multiply(1,0,1).normalize();
-        target=null;targetPosition=null;targetVelocity=Vec3d.ZERO;prediction.resetMotion();suppressAcquire=true;
+        escapeY=Math.max(world.getMinY()+2,boat.getY()-45);escapeUntil=tick+100;
+        escapeAway=boat.position().subtract(targetPosition).multiply(1,0,1).normalize();
+        target=null;targetPosition=null;targetVelocity=Vec3.ZERO;prediction.resetMotion();suppressAcquire=true;
         record("DISENGAGE tick=%d reason=enemy above at height limit",tick);
         info("Disengaging: enemy above at the height limit. Descending; lock again to resume.");
     }
 
-    private Vec3d escapeMovement() {
+    private Vec3 escapeMovement() {
         if(!Double.isFinite(escapeY))return null;
-        if(manualMovement() || tick>escapeUntil || boat.getY()<=escapeY+.1) {escapeY=Double.NaN;return Vec3d.ZERO;}
+        if(manualMovement() || tick>escapeUntil || boat.getY()<=escapeY+.1) {escapeY=Double.NaN;return Vec3.ZERO;}
         double dy=-Math.min(phase.captureVerticalLimit(),boat.getY()-escapeY);
-        for(Vec3d step:new Vec3d[]{new Vec3d(0,dy,0),escapeAway.multiply(4.75).add(0,dy,0),escapeAway.multiply(Math.min(9,phase.travelSpeed())).add(0,Math.max(-9,dy),0)})
+        for(Vec3 step:new Vec3[]{new Vec3(0,dy,0),escapeAway.scale(4.75).add(0,dy,0),escapeAway.scale(Math.min(9,phase.travelSpeed())).add(0,Math.max(-9,dy),0)})
             if(phase.clearTravel(boat,step)&&safeTravel(boat,step))return step;
-        status="disengaged: descent obstructed";return Vec3d.ZERO;
+        status="disengaged: descent obstructed";return Vec3.ZERO;
     }
 
     @EventHandler(priority = EventPriority.LOWEST - 1000)
     private void onSend(PacketEvent.Send event) {
-        if (!mc.isOnThread() || !sameSession() || event.connection != connection || event.isCancelled()) return;
+        if (!mc.isSameThread() || !sameSession() || event.connection != connection || event.isCancelled()) return;
 
-        if (!player.hasVehicle() && event.packet instanceof PlayerInteractEntityC2SPacket interaction) {
+        if (!player.isPassenger() && event.packet instanceof ServerboundInteractPacket interaction) {
             IPlayerInteractEntityC2SPacket access = (IPlayerInteractEntityC2SPacket) interaction;
             boolean[] interact = { false };
-            interaction.handle(new PlayerInteractEntityC2SPacket.Handler() {
-                @Override public void interact(Hand hand) { interact[0] = true; }
-                @Override public void interactAt(Hand hand, Vec3d position) { interact[0] = true; }
-                @Override public void attack() {}
+            interaction.dispatch(new ServerboundInteractPacket.Handler() {
+                @Override public void onInteraction(InteractionHand hand) { interact[0] = true; }
+                @Override public void onInteraction(InteractionHand hand, Vec3 position) { interact[0] = true; }
+                @Override public void onAttack() {}
             });
-            if (interact[0] && access.meteor$getEntity() instanceof AbstractBoatEntity target) {
+            if (interact[0] && access.meteor$getEntity() instanceof AbstractBoat target) {
                 mount.begin(target.getId(), tick);
-                primePacket = new PlayerMoveC2SPacket.OnGroundOnly(false, player.horizontalCollision);
-                network.sendPacket(primePacket);
+                primePacket = new ServerboundMovePlayerPacket.StatusOnly(false, player.horizontalCollision);
+                network.send(primePacket);
                 primePacket = null;
                 record("PRIME tick=%d boat=%d", tick, target.getId());
             }
         }
-        if (event.packet instanceof PlayerMoveC2SPacket movement && !player.hasVehicle()
+        if (event.packet instanceof ServerboundMovePlayerPacket movement && !player.isPassenger()
             && (movement == primePacket || mount.window(tick))) {
             ((PlayerMoveC2SPacketAccessor) movement).quiettee$setOnGround(false);
         }
         if (sendingRelease) return;
-        if (web.busy() && (event.packet instanceof PlayerInteractItemC2SPacket
-            || event.packet instanceof PlayerActionC2SPacket a && a.getAction()==PlayerActionC2SPacket.Action.RELEASE_USE_ITEM)) {
+        if (web.busy() && (event.packet instanceof ServerboundUseItemPacket
+            || event.packet instanceof ServerboundPlayerActionPacket a && a.getAction()==ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM)) {
             event.cancel();
-            if(player.isUsingItem()) { cancelDraw(); player.clearActiveItem(); }
+            if(player.isUsingItem()) { cancelDraw(); player.stopUsingItem(); }
             return;
         }
 
@@ -514,34 +520,34 @@ public final class BoatShot extends Module {
             event.cancel(); record("DRAW-RESTART-SUPPRESSED tick=%d packet=%s",tick,event.packet.getClass().getSimpleName()); return;
         }
 
-        if (pending != null && (event.packet instanceof PlayerInteractItemC2SPacket
-            || event.packet instanceof UpdateSelectedSlotC2SPacket
-            || event.packet instanceof PlayerActionC2SPacket action && action.getAction() != PlayerActionC2SPacket.Action.RELEASE_USE_ITEM)) abort("new item action", true);
-        if (!(event.packet instanceof PlayerActionC2SPacket action)
-            || action.getAction() != PlayerActionC2SPacket.Action.RELEASE_USE_ITEM) return;
+        if (pending != null && (event.packet instanceof ServerboundUseItemPacket
+            || event.packet instanceof ServerboundSetCarriedItemPacket
+            || event.packet instanceof ServerboundPlayerActionPacket action && action.getAction() != ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM)) abort("new item action", true);
+        if (!(event.packet instanceof ServerboundPlayerActionPacket action)
+            || action.getAction() != ServerboundPlayerActionPacket.Action.RELEASE_USE_ITEM) return;
         if (pending != null) { event.cancel(); return; }
-        if (!driving() || player.getActiveHand() != Hand.MAIN_HAND
-            || !(player.getActiveItem().getItem() instanceof BowItem)) return;
+        if (!driving() || player.getUsedItemHand() != InteractionHand.MAIN_HAND
+            || !(player.getUseItem().getItem() instanceof BowItem)) return;
         if (!mount.ready()) { reject(event, "reboard with Boat Shot enabled"); return; }
-        if (phase == null || !phase.shotReady(boat) || lastWire == null || corrected.get() || mc.currentScreen != null) {
+        if (phase == null || !phase.shotReady(boat) || lastWire == null || corrected.get() || mc.screen != null) {
             reject(event, "wait for Boat Phase to be ready"); return;
         }
         if (cycle.stage() != BoatShotCycle.Stage.IDLE) { reject(event, "wait for the previous arrow"); return; }
-        int age = player.getItemUseTime();
+        int age = player.getTicksUsingItem();
         if (age < 3) { reject(event,"bow draw too short to spawn an arrow"); return; }
         if (fullDraw.get() && !(automaticReleasing && (automaticFiring() || rapidFire.get())) && age < 20) { reject(event, "charge the bow fully"); return; }
-        float pitch = player.getPitch(), yaw = player.getYaw();
+        float pitch = player.getXRot(), yaw = player.getYRot();
         double deltaY;
         if (aimEnabled()) {
-            if (!validTarget(target)) { target = persistentLock() ? null : chooseTarget(); targetPosition = target == null ? null : observedPosition(target); targetVelocity = Vec3d.ZERO; prediction.resetMotion(); }
+            if (!validTarget(target)) { target = persistentLock() ? null : chooseTarget(); targetPosition = target == null ? null : observedPosition(target); targetVelocity = Vec3.ZERO; prediction.resetMotion(); }
             if (target == null) { reject(event, "no living target in range near the crosshair"); return; }
             Aim aim = aimedShot(age);
             if (aim == null) { reject(event, aimFailure); return; }
             deltaY = aim.delta(); pitch = aim.pitch(); yaw = aim.yaw();
             record("AIM tick=%d target=%d name=%s yaw=%.2f pitch=%.2f velocity=%s lead=%.2f automatic=%b ping=%d", tick, target.getId(), target.getName().getString(), yaw, pitch, targetVelocity, predictedLead, adaptivePrediction.get() || automaticLead.get(), PlayerUtils.getPing());
         } else deltaY = BoatShotCycle.burst(pitch, shotBurst(), minimumPitch.get());
-        Vec3d delta = new Vec3d(0, deltaY, 0);
-        if (Math.abs(deltaY) < 0.1 || lastWire.distanceTo(boat.getEntityPos()) > 1e-4
+        Vec3 delta = new Vec3(0, deltaY, 0);
+        if (Math.abs(deltaY) < 0.1 || lastWire.distanceTo(boat.position()) > 1e-4
             || !phase.shotPathClear(boat, delta) || !clearMuzzle(delta, yaw, pitch) || !safeTravel(boat, delta)) {
             reject(event, "aim steeply and leave clear space for the burst");
             return;
@@ -550,8 +556,8 @@ public final class BoatShot extends Module {
         pending = action;
         queuedAutomatic = automaticReleasing;
         queuedAt = tick;
-        shotEyeOffset = player.getEyePos().subtract(boat.getEntityPos()).add(0,-.1,0);
-        shotStack = player.getMainHandStack().copy();
+        shotEyeOffset = player.getEyePosition().subtract(boat.position()).add(0,-.1,0);
+        shotStack = player.getMainHandItem().copy();
         slot = player.getInventory().getSelectedSlot();
         shotYaw = yaw;
         shotPitch = pitch;
@@ -562,35 +568,35 @@ public final class BoatShot extends Module {
         record("QUEUE tick=%d from=%s deltaY=%.3f yaw=%.2f pitch=%.2f draw=%d bow=%s targetHealth=%s", tick, shotOrigin, deltaY, shotYaw, shotPitch, drawTicks, shotStack, target == null ? "none" : target.getHealth());
     }
 
-    public Vec3d movement(AbstractBoatEntity candidate) {
+    public Vec3 movement(AbstractBoat candidate) {
         if(candidate==boat && driving() && phase!=null && Double.isFinite(escapeY))return escapeMovement();
         if (candidate == boat && driving() && web.busy() && phase != null && phase.shotReady(boat)) {
-            Vec3d step=web.movement(boat,phase.travelSpeed(),phase.captureVerticalLimit(),phase,message -> record("%s",message));
-            return step != null && safeTravel(boat,step) ? step : Vec3d.ZERO;
+            Vec3 step=web.movement(boat,phase.travelSpeed(),phase.captureVerticalLimit(),phase,message -> record("%s",message));
+            return step != null && safeTravel(boat,step) ? step : Vec3.ZERO;
         }
         if (candidate != boat || !driving() || cycle.stage() == BoatShotCycle.Stage.IDLE) return null;
         if (corrected.get() || !mount.ready() || phase == null || !phase.shotReady(boat)) { abort("movement interrupted", true); return null; }
         if (pending != null && (!sameBow() || cycle.expired(tick))) { abort("stale release", true); return null; }
         if (cycle.stage() == BoatShotCycle.Stage.RETURNING && manualMovement()) { abort("manual return cancel", false); return null; }
         if (pending != null && cycle.stage() == BoatShotCycle.Stage.QUEUED && aimEnabled()) {
-            if (!validTarget(target)) { abort("target lost before burst",true); return Vec3d.ZERO; }
+            if (!validTarget(target)) { abort("target lost before burst",true); return Vec3.ZERO; }
             int effectiveDraw = drawTicks + Math.max(0,tick-queuedAt);
             Aim refreshed = aimedShot(effectiveDraw,shotOrigin.add(0,cycle.destinationY()-shotOrigin.y,0).add(shotEyeOffset),cycle.destinationY()-shotOrigin.y);
             if (refreshed == null || Math.signum(refreshed.delta()) != Math.signum(cycle.destinationY()-shotOrigin.y)) {
-                abort("intercept changed before burst",true); return Vec3d.ZERO;
+                abort("intercept changed before burst",true); return Vec3.ZERO;
             }
             shotYaw=refreshed.yaw();shotPitch=refreshed.pitch();drawTicks=effectiveDraw;
             record("AIM-FIRE tick=%d target=%d position=%s velocity=%s lead=%.2f yaw=%.3f pitch=%.3f",tick,target.getId(),targetPosition,targetVelocity,
                 aimLead(),shotYaw,shotPitch);
         }
         double dy = cycle.plan(tick, boat.getY(), phase.shotVerticalLimit());
-        Vec3d delta = new Vec3d(0, dy, 0);
+        Vec3 delta = new Vec3(0, dy, 0);
         if (pending == null) {
-            Vec3d pursuit = followMovement(candidate, phase.travelSpeed(), phase.shotVerticalLimit());
-            if (pursuit != null) delta = new Vec3d(pursuit.x,dy,pursuit.z);
+            Vec3 pursuit = followMovement(candidate, phase.travelSpeed(), phase.shotVerticalLimit());
+            if (pursuit != null) delta = new Vec3(pursuit.x,dy,pursuit.z);
         }
         if (pending == null && (!phase.clearTravel(boat,delta) || !safeTravel(boat,delta))) {
-            Vec3d vertical=new Vec3d(0,dy,0), horizontal=new Vec3d(delta.x,0,delta.z);
+            Vec3 vertical=new Vec3(0,dy,0), horizontal=new Vec3(delta.x,0,delta.z);
             if(phase.clearTravel(boat,vertical)&&safeTravel(boat,vertical)) delta=vertical;
             else if(phase.clearTravel(boat,horizontal)&&safeTravel(boat,horizontal)) delta=horizontal;
         }
@@ -604,40 +610,40 @@ public final class BoatShot extends Module {
 
     @EventHandler(priority = EventPriority.LOWEST - 1000)
     private void onSent(PacketEvent.Sent event) {
-        if (!mc.isOnThread() || !sameSession() || event.connection != connection) return;
-        if(event.packet instanceof PlayerInteractItemC2SPacket || event.packet instanceof PlayerInteractBlockC2SPacket)
+        if (!mc.isSameThread() || !sameSession() || event.connection != connection) return;
+        if(event.packet instanceof ServerboundUseItemPacket || event.packet instanceof ServerboundUseItemOnPacket)
             useBudget.sent(event.packet,System.nanoTime());
-        if (event.packet instanceof PlayerMoveC2SPacket movement) {
-            if (!player.hasVehicle()) {
+        if (event.packet instanceof ServerboundMovePlayerPacket movement) {
+            if (!player.isPassenger()) {
                 mount.sentGround(movement.isOnGround(), tick);
             }
-            if (movement == lookPacket) lookSent = Math.abs(movement.getYaw(Float.NaN) - shotYaw) < 1e-4
-                && Math.abs(movement.getPitch(Float.NaN) - shotPitch) < 1e-4;
+            if (movement == lookPacket) lookSent = Math.abs(movement.getYRot(Float.NaN) - shotYaw) < 1e-4
+                && Math.abs(movement.getXRot(Float.NaN) - shotPitch) < 1e-4;
         }
         if (event.packet == pending && sendingRelease) releaseSent = true;
-        if (!(event.packet instanceof VehicleMoveC2SPacket packet) || !driving()) return;
+        if (!(event.packet instanceof ServerboundMoveVehiclePacket packet) || !driving()) return;
         if (!eventGate.vehicle(packet)) return;
-        Vec3d previous = lastWire;
+        Vec3 previous = lastWire;
         lastWire = packet.position();
         if (pending == null || previous == null || cycle.stage() != BoatShotCycle.Stage.MOVED) return;
-        Vec3d actual = lastWire.subtract(previous);
-        if (corrected.get() || !sameBow() || !cycle.sent(tick, previous.y, lastWire.y, actual.horizontalLength())
+        Vec3 actual = lastWire.subtract(previous);
+        if (corrected.get() || !sameBow() || !cycle.sent(tick, previous.y, lastWire.y, actual.horizontalDistance())
             || Math.abs(lastWire.x - shotOrigin.x) > 1e-4 || Math.abs(lastWire.z - shotOrigin.z) > 1e-4) {
             abort("wire movement mismatch", true);
             return;
         }
 
         lookSent = false;
-        lookPacket = new PlayerMoveC2SPacket.LookAndOnGround(shotYaw, shotPitch, false, player.horizontalCollision);
-        network.sendPacket(lookPacket);
+        lookPacket = new ServerboundMovePlayerPacket.Rot(shotYaw, shotPitch, false, player.horizontalCollision);
+        network.send(lookPacket);
         lookPacket = null;
         if (!lookSent || corrected.get()) { abort("aim packet interrupted", true); return; }
         double launch = BoatShotCycle.launchSpeed(shotPitch, actual.y, bowTicks(drawTicks), false);
         releaseSent = false;
         sendingRelease = true;
-        try { network.sendPacket(pending); }
+        try { network.send(pending); }
         finally { sendingRelease = false; pending = null; shotStack = ItemStack.EMPTY; }
-        if (queuedAutomatic) player.clearActiveItem();
+        if (queuedAutomatic) player.stopUsingItem();
         queuedAutomatic = false;
         if (releaseSent) {
             ownedAutoDraw=false;
@@ -654,26 +660,26 @@ public final class BoatShot extends Module {
 
     private boolean validTarget(LivingEntity entity) {
         if (entity == null || entity == player || !entity.isAlive() || entity.isRemoved()
-            || entity instanceof ArmorStandEntity || entity.getRootVehicle() == boat
-            || world.getEntityById(entity.getId()) != entity || !persistentLock() && player.distanceTo(entity) > targetRange.get()) return false;
-        if (entity instanceof PlayerEntity other) {
-            if (other.isSpectator() || other.getAbilities().creativeMode || !Friends.get().shouldAttack(other)) return false;
+            || entity instanceof ArmorStand || entity.getRootVehicle() == boat
+            || world.getEntity(entity.getId()) != entity || !persistentLock() && player.distanceTo(entity) > targetRange.get()) return false;
+        if (entity instanceof Player other) {
+            if (other.isSpectator() || other.getAbilities().instabuild || !Friends.get().shouldAttack(other)) return false;
         }
         return true;
     }
 
     private LivingEntity chooseTarget() {
         if (crosshairSelection.get()) return chooseCrosshairTarget();
-        Vec3d eye = player.getEyePos(), view = Vec3d.fromPolar(player.getPitch(), player.getYaw());
+        Vec3 eye = player.getEyePosition(), view = Vec3.directionFromRotation(player.getXRot(), player.getYRot());
         LivingEntity best = null;
         double bestScore = -2, minimum = Math.cos(Math.toRadians(targetAngle.get()));
-        for (Entity entity : world.getEntities()) {
+        for (Entity entity : world.entitiesForRendering()) {
             if (!(entity instanceof LivingEntity living) || !validTarget(living) || player.distanceTo(living)>targetRange.get()) continue;
-            Vec3d offset = living.getBoundingBox().getCenter().subtract(eye);
-            double score = view.dotProduct(offset.normalize());
+            Vec3 offset = living.getBoundingBox().getCenter().subtract(eye);
+            double score = view.dot(offset.normalize());
             if (score < minimum) continue;
-            boolean betterGroup = preferPlayers.get() && living instanceof PlayerEntity && !(best instanceof PlayerEntity);
-            boolean sameGroup = !preferPlayers.get() || (living instanceof PlayerEntity) == (best instanceof PlayerEntity);
+            boolean betterGroup = preferPlayers.get() && living instanceof Player && !(best instanceof Player);
+            boolean sameGroup = !preferPlayers.get() || (living instanceof Player) == (best instanceof Player);
             if (best == null || betterGroup || sameGroup && score > bestScore) { best = living; bestScore = score; }
         }
         if (best != null) {
@@ -684,20 +690,20 @@ public final class BoatShot extends Module {
     }
 
     private LivingEntity chooseCrosshairTarget() {
-        var camera = mc.gameRenderer.getCamera();
-        Vec3d eye = camera.getCameraPos(), view = Vec3d.fromPolar(camera.getPitch(), camera.getYaw());
+        var camera = mc.gameRenderer.getMainCamera();
+        Vec3 eye = camera.position(), view = Vec3.directionFromRotation(camera.xRot(), camera.yRot());
         LivingEntity best = null;
         BoatShotCrosshair.Score bestScore = null;
         double minimum = Math.cos(Math.toRadians(crosshairAngle.get()));
-        for (Entity entity : world.getEntities()) {
+        for (Entity entity : world.entitiesForRendering()) {
             if (!(entity instanceof LivingEntity living) || !validTarget(living) || player.distanceTo(living)>targetRange.get()) continue;
 
-            float partial = mc.getRenderTickCounter().getTickProgress(false);
-            Box body = living.getBoundingBox().offset(living.getLerpedPos(partial).subtract(living.getEntityPos()));
+            float partial = mc.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+            AABB body = living.getBoundingBox().move(living.getPosition(partial).subtract(living.position()));
             var score = BoatShotCrosshair.score(body, eye, view, targetRange.get());
             if (score == null || score.cosine() < minimum || !score.betterThan(bestScore)) continue;
-            if (world.raycast(new RaycastContext(eye, score.point(), RaycastContext.ShapeType.COLLIDER,
-                RaycastContext.FluidHandling.NONE, player)).getType() != HitResult.Type.MISS) continue;
+            if (world.clip(new ClipContext(eye, score.point(), ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE, player)).getType() != HitResult.Type.MISS) continue;
             best = living;
             bestScore = score;
         }
@@ -710,33 +716,33 @@ public final class BoatShot extends Module {
 
     private static double serverTps() { return TickRate.INSTANCE == null ? 20 : TickRate.INSTANCE.getTickRate(); }
 
-    private static Vec3d observedPosition(LivingEntity entity) {
-        var interpolation=entity.getInterpolator();
-        return interpolation == null ? entity.getEntityPos() : interpolation.getLerpedPos();
+    private static Vec3 observedPosition(LivingEntity entity) {
+        var interpolation=entity.getInterpolation();
+        return interpolation == null ? entity.position() : interpolation.position();
     }
 
-    private Box observedTargetBox() {
-        return target.getBoundingBox().offset(targetPosition.subtract(target.getEntityPos()));
+    private AABB observedTargetBox() {
+        return target.getBoundingBox().move(targetPosition.subtract(target.position()));
     }
 
     private void updateTarget() {
-        boolean drawing = player.isUsingItem() && player.getActiveHand() == Hand.MAIN_HAND
-            && player.getActiveItem().getItem() instanceof BowItem;
-        boolean keep = persistentLock() || automaticFiring() || follows() && player.getMainHandStack().getItem() instanceof BowItem
-            || autoRelease.get() && Input.isPressed(mc.options.useKey);
-        boolean held=Input.isPressed(mc.options.useKey);
+        boolean drawing = player.isUsingItem() && player.getUsedItemHand() == InteractionHand.MAIN_HAND
+            && player.getUseItem().getItem() instanceof BowItem;
+        boolean keep = persistentLock() || automaticFiring() || follows() && player.getMainHandItem().getItem() instanceof BowItem
+            || autoRelease.get() && Input.isPressed(mc.options.keyUse);
+        boolean held=Input.isPressed(mc.options.keyUse);
         if(!held)suppressAcquire=false;
         boolean acquire = drawLock.update(drawing, held, autoRelease.get() || automaticFiring(),
             pending != null || cycle.stage() != BoatShotCycle.Stage.IDLE || web.busy(),persistentLock(),validTarget(target)) && !suppressAcquire;
         if (!aimEnabled() || !drawing && !keep && pending == null && cycle.stage() == BoatShotCycle.Stage.IDLE) {
-            target = null; targetPosition = null; targetVelocity = Vec3d.ZERO; prediction.resetMotion(); return;
+            target = null; targetPosition = null; targetVelocity = Vec3.ZERO; prediction.resetMotion(); return;
         }
         if (!validTarget(target) || acquire) {
             navigator.reset(); web.retreat();
             if(target!=null && !validTarget(target)) stopAutomaticDraw();
             target = drawing && (acquire || !persistentLock() && !automaticFiring()) ? chooseTarget() : null;
             targetPosition = target == null ? null : observedPosition(target);
-            targetVelocity = Vec3d.ZERO;
+            targetVelocity = Vec3.ZERO;
             prediction.resetMotion();
             acquiredTarget();
         }
@@ -745,24 +751,24 @@ public final class BoatShot extends Module {
             double ratio=BoatShotPrediction.serverTicksPerClientTick(serverTps());
             var velocity=prediction.observePosition(tick,targetPosition.x,targetPosition.y,targetPosition.z,
                 adaptivePrediction.get()?(int)Math.ceil(3/ratio):5);
-            targetVelocity=new Vec3d(velocity.x(),velocity.y(),velocity.z()).multiply(1/ratio);
+            targetVelocity=new Vec3(velocity.x(),velocity.y(),velocity.z()).scale(1/ratio);
         }
     }
 
     @EventHandler private void onRender(Render3DEvent event) {
         if (showTarget.get() && driving() && validTarget(target)) {
             Color line = targetColor.get();
-            Box box = target.getBoundingBox().expand(.08);
+            AABB box = target.getBoundingBox().inflate(.08);
             event.renderer.box(box, new Color(line.r,line.g,line.b,targetFill.get()), line, ShapeMode.Both, 0);
-            event.renderer.box(box.expand(.045), new Color(0,0,0,0), new Color(255,255,255,220), ShapeMode.Lines, 0);
+            event.renderer.box(box.inflate(.045), new Color(0,0,0,0), new Color(255,255,255,220), ShapeMode.Lines, 0);
 
-            event.renderer.box(new Box(box.minX-.12,box.maxY+.15,box.minZ-.12,box.maxX+.12,box.maxY+.23,box.maxZ+.12),
+            event.renderer.box(new AABB(box.minX-.12,box.maxY+.15,box.minZ-.12,box.maxX+.12,box.maxY+.23,box.maxZ+.12),
                 new Color(line.r,line.g,line.b,180), line, ShapeMode.Both, 0);
         }
     }
 
     @EventHandler private void onRenderStatus(Render2DEvent event) {
-        if(!combatStatus.get() || !driving() || mc.options.hudHidden)return;
+        if(!combatStatus.get() || !driving() || mc.options.hideGui)return;
         TextRenderer text=TextRenderer.get();if(text.isBuilding())return;
         String label="BoatShot | "+status;
         text.begin(1.2);
@@ -773,166 +779,166 @@ public final class BoatShot extends Module {
     }
 
     private void resetCover() {coverMode=false;coverRoute=null;coverIndex=0;nextCoverSearch=0;}
-    private static BoatShotCover.Point point(Vec3d v) {return new BoatShotCover.Point(v.x,v.y,v.z);}
-    private static Vec3d vector(BoatShotCover.Point p) {return new Vec3d(p.x(),p.y(),p.z());}
+    private static BoatShotCover.Point point(Vec3 v) {return new BoatShotCover.Point(v.x,v.y,v.z);}
+    private static Vec3 vector(BoatShotCover.Point p) {return new Vec3(p.x(),p.y(),p.z());}
     private void updateCover() {
         if(!seekCoverAngle.get() || !follows() || !aimEnabled() || !validTarget(target) || phase==null) {resetCover();return;}
-        if(manualMovement() || mc.currentScreen!=null || pending!=null || cycle.stage()!=BoatShotCycle.Stage.IDLE
-            || !phase.shotReady(boat) || !(player.getMainHandStack().getItem() instanceof BowItem) || tick<nextCoverSearch)return;
+        if(manualMovement() || mc.screen!=null || pending!=null || cycle.stage()!=BoatShotCycle.Stage.IDLE
+            || !phase.shotReady(boat) || !(player.getMainHandItem().getItem() instanceof BowItem) || tick<nextCoverSearch)return;
         nextCoverSearch=tick+20;
-        Box body=observedTargetBox();
-        Vec3d overhead=new Vec3d(body.getCenter().x,Math.min(phase.captureCeiling(boat),body.maxY+Math.max(followHeight.get(),shotBurst()+6)),body.getCenter().z);
-        boolean covered=world.raycast(new RaycastContext(overhead,body.getCenter(),RaycastContext.ShapeType.COLLIDER,
-            RaycastContext.FluidHandling.NONE,player)).getType()!=HitResult.Type.MISS;
+        AABB body=observedTargetBox();
+        Vec3 overhead=new Vec3(body.getCenter().x,Math.min(phase.captureCeiling(boat),body.maxY+Math.max(followHeight.get(),shotBurst()+6)),body.getCenter().z);
+        boolean covered=world.clip(new ClipContext(overhead,body.getCenter(),ClipContext.Block.COLLIDER,
+            ClipContext.Fluid.NONE,player)).getType()!=HitResult.Type.MISS;
         if(!covered) {coverMode=false;coverRoute=null;return;}
         coverMode=true;
 
         if(web.busy())return;
         String previousFailure=aimFailure,previousObstruction=obstruction;
         try {
-            coverRoute=BoatShotCover.find(point(boat.getEntityPos()),new BoatShotCover.Point(body.getCenter().x,body.maxY,body.getCenter().z),
+            coverRoute=BoatShotCover.find(point(boat.position()),new BoatShotCover.Point(body.getCenter().x,body.maxY,body.getCenter().z),
                 phase.captureCeiling(boat),this::coverFiringStation,(a,b)->coverTravel(vector(a),vector(b)));
             coverIndex=0;
-            record("COVER tick=%d route=%s gliding=%b",tick,coverRoute==null?"none":coverRoute.points(),target.isGliding());
+            record("COVER tick=%d route=%s gliding=%b",tick,coverRoute==null?"none":coverRoute.points(),target.isFallFlying());
         } finally {aimFailure=previousFailure;obstruction=previousObstruction;}
     }
     private boolean coverFiringStation(BoatShotCover.Point p) {
-        Vec3d station=vector(p),eye=player.getEyePos().add(station.subtract(boat.getEntityPos()));
+        Vec3 station=vector(p),eye=player.getEyePosition().add(station.subtract(boat.position()));
         if(eye.y<=observedTargetBox().maxY+2)return false;
         double burst=-BoatShotAutomation.downwardBurst(Math.min(2,shotBurst()),eye.y,observedTargetBox().maxY);
         if(!coverTravel(station,station.add(0,burst,0)))return false;
         Aim aim=aimedShot(BoatShotDamage.clientTicks(20,serverTps()),eye.add(0,burst-.1,0),burst);
         if(aim==null)return false;
-        Vec3d direction=Vec3d.fromPolar(aim.pitch(),aim.yaw());
-        for(Vec3d start:new Vec3d[]{eye.add(0,-.1,0),eye.add(0,burst-.1,0)})
-            if(world.raycast(new RaycastContext(start,start.add(direction.multiply(2)),RaycastContext.ShapeType.COLLIDER,
-                RaycastContext.FluidHandling.NONE,player)).getType()!=HitResult.Type.MISS)return false;
+        Vec3 direction=Vec3.directionFromRotation(aim.pitch(),aim.yaw());
+        for(Vec3 start:new Vec3[]{eye.add(0,-.1,0),eye.add(0,burst-.1,0)})
+            if(world.clip(new ClipContext(start,start.add(direction.scale(2)),ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE,player)).getType()!=HitResult.Type.MISS)return false;
         return true;
     }
-    private boolean coverTravel(Vec3d from,Vec3d to) {
-        Vec3d delta=to.subtract(from);
-        if(!Double.isFinite(delta.lengthSquared()) || delta.length()>96)return false;
+    private boolean coverTravel(Vec3 from,Vec3 to) {
+        Vec3 delta=to.subtract(from);
+        if(!Double.isFinite(delta.lengthSqr()) || delta.length()>96)return false;
 
         int sections=Math.max(1,(int)Math.ceil(delta.length()/3));
-        Vec3d step=delta.multiply(1.0/sections);
+        Vec3 step=delta.scale(1.0/sections);
         for(int i=0;i<sections;i++) {
-            Vec3d offset=from.add(step.multiply(i)).subtract(boat.getEntityPos());
-            for(Entity passenger:boat.streamSelfAndPassengers().toList()) {
-                Box path=passenger.getBoundingBox().offset(offset).stretch(step).contract(1e-7);
-                if(path.minY<world.getBottomY()+2 || path.maxY>world.getTopYInclusive()+1 || !world.getWorldBorder().contains(path))return false;
+            Vec3 offset=from.add(step.scale(i)).subtract(boat.position());
+            for(Entity passenger:boat.getSelfAndPassengers().toList()) {
+                AABB path=passenger.getBoundingBox().move(offset).expandTowards(step).deflate(1e-7);
+                if(path.minY<world.getMinY()+2 || path.maxY>world.getMaxY()+1 || !world.getWorldBorder().isWithinBounds(path))return false;
                 for(int x=(int)Math.floor(path.minX)>>4;x<=(int)Math.floor(path.maxX)>>4;x++)
                     for(int z=(int)Math.floor(path.minZ)>>4;z<=(int)Math.floor(path.maxZ)>>4;z++)
-                        if(!world.getChunkManager().isChunkLoaded(x,z))return false;
-                if(!world.isSpaceEmpty(passenger,path))return false;
-                for(var pos:net.minecraft.util.math.BlockPos.iterate(net.minecraft.util.math.BlockPos.ofFloored(path.minX,path.minY,path.minZ),
-                    net.minecraft.util.math.BlockPos.ofFloored(path.maxX,path.maxY,path.maxZ)))if(!world.getFluidState(pos).isEmpty())return false;
+                        if(!world.getChunkSource().hasChunk(x,z))return false;
+                if(!world.noCollision(passenger,path))return false;
+                for(var pos:net.minecraft.core.BlockPos.betweenClosed(net.minecraft.core.BlockPos.containing(path.minX,path.minY,path.minZ),
+                    net.minecraft.core.BlockPos.containing(path.maxX,path.maxY,path.maxZ)))if(!world.getFluidState(pos).isEmpty())return false;
             }
             if(!guard.clearAt(world,boat,offset,step,protectCrystals()))return false;
         }
         return true;
     }
 
-    public Vec3d followMovement(AbstractBoatEntity candidate, double speed, double vertical) {
+    public Vec3 followMovement(AbstractBoat candidate, double speed, double vertical) {
         if (!follows() || !aimEnabled() || candidate != boat || !driving() || !validTarget(target)
-            || !inventoryFollowAllowed() && !(player.getMainHandStack().getItem() instanceof BowItem)
-            || manualMovement() || mc.currentScreen != null && !inventoryFollowAllowed()
+            || !inventoryFollowAllowed() && !(player.getMainHandItem().getItem() instanceof BowItem)
+            || manualMovement() || mc.screen != null && !inventoryFollowAllowed()
             || pending != null) return null;
         if(coverMode) {
-            if(coverRoute==null)return Vec3d.ZERO;
-            while(coverIndex<coverRoute.points().size()-1 && boat.getEntityPos().distanceTo(vector(coverRoute.points().get(coverIndex)))<.15)coverIndex++;
-            Vec3d goal=vector(coverRoute.points().get(coverIndex)).subtract(boat.getEntityPos());
+            if(coverRoute==null)return Vec3.ZERO;
+            while(coverIndex<coverRoute.points().size()-1 && boat.position().distanceTo(vector(coverRoute.points().get(coverIndex)))<.15)coverIndex++;
+            Vec3 goal=vector(coverRoute.points().get(coverIndex)).subtract(boat.position());
 
             var step=BoatShotCover.step(point(goal),speed,phase.captureVerticalLimit());
-            Vec3d delta=new Vec3d(step.x(),step.y(),step.z());
+            Vec3 delta=new Vec3(step.x(),step.y(),step.z());
             if(phase.clearTravel(candidate,delta)&&safeTravel(candidate,delta))return delta;
-            coverRoute=null;nextCoverSearch=tick+10;return Vec3d.ZERO;
+            coverRoute=null;nextCoverSearch=tick+10;return Vec3.ZERO;
         }
         double height = Math.max(followHeight.get(), shotBurst()+6);
         double lead = predictedLead + Math.max(0, height-shotBurst())/(shotBurst()+3);
-        Vec3d goal = targetPosition.add(targetVelocity.multiply(lead+leadAdjustment.get()));
-        boolean capture=webCube.get() && webEligible() && target instanceof PlayerEntity && !web.caught(target) && !web.shotWindow(tick);
+        Vec3 goal = targetPosition.add(targetVelocity.scale(lead+leadAdjustment.get()));
+        boolean capture=webCube.get() && webEligible() && target instanceof Player && !web.caught(target) && !web.shotWindow(tick);
         if(autoCombat.get() && capture) {
-            Vec3d interception=web.interception(boat,targetPosition,targetVelocity,predictedLead+leadAdjustment.get(),phase);
+            Vec3 interception=web.interception(boat,targetPosition,targetVelocity,predictedLead+leadAdjustment.get(),phase);
             if(interception!=null)goal=interception;
         }
         double goalY=Math.min(phase.captureCeiling(boat),observedTargetBox().maxY+height);
-        Vec3d waterExit=phase.waterDeparture(candidate,goalY-boat.getY());
-        if(waterExit!=null)return safeTravel(candidate,waterExit)?waterExit:Vec3d.ZERO;
+        Vec3 waterExit=phase.waterDeparture(candidate,goalY-boat.getY());
+        if(waterExit!=null)return safeTravel(candidate,waterExit)?waterExit:Vec3.ZERO;
         if(autoCombat.get()) {
             var fast=BoatShotAutomation.approach(goal.x-boat.getX(),goalY-boat.getY(),goal.z-boat.getZ(),speed,phase.captureVerticalLimit());
-            Vec3d delta=new Vec3d(fast.x(),fast.y(),fast.z());
+            Vec3 delta=new Vec3(fast.x(),fast.y(),fast.z());
             if(phase.clearTravel(candidate,delta)&&safeTravel(candidate,delta))return delta;
         }
         BoatShotPursuit.Step step = navigator.next(goal.x-boat.getX(), goalY-boat.getY(), goal.z-boat.getZ(),
             targetVelocity.x*BoatShotPrediction.serverTicksPerClientTick(serverTps()),targetVelocity.z*BoatShotPrediction.serverTicksPerClientTick(serverTps()),speed,vertical,
-            p -> phase.clearTravel(candidate,new Vec3d(p.x(),p.y(),p.z())) && safeTravel(candidate,new Vec3d(p.x(),p.y(),p.z())));
-        return new Vec3d(step.x(),step.y(),step.z());
+            p -> phase.clearTravel(candidate,new Vec3(p.x(),p.y(),p.z())) && safeTravel(candidate,new Vec3(p.x(),p.y(),p.z())));
+        return new Vec3(step.x(),step.y(),step.z());
     }
 
     private void automaticDraw() {
         boolean autonomous=automaticFiring();
         boolean rapid=autonomous || rapidFire.get();
-        String pause=Double.isFinite(escapeY)?"disengaging":!validTarget(target)?"lock a target to begin":mc.currentScreen!=null?"paused: screen open"
+        String pause=Double.isFinite(escapeY)?"disengaging":!validTarget(target)?"lock a target to begin":mc.screen!=null?"paused: screen open"
             :manualMovement()?"paused: manual steering":!mount.ready()?"reboard to prime bow":phase==null||!phase.shotReady(boat)?"waiting for BoatPhase"
-            :!(player.getMainHandStack().getItem() instanceof BowItem)?"paused: select a bow":null;
-        if(pause!=null || (!autonomous && (!autoRelease.get() || !Input.isPressed(mc.options.useKey))) || !aimEnabled() || mc.interactionManager==null) {
+            :!(player.getMainHandItem().getItem() instanceof BowItem)?"paused: select a bow":null;
+        if(pause!=null || (!autonomous && (!autoRelease.get() || !Input.isPressed(mc.options.keyUse))) || !aimEnabled() || mc.gameMode==null) {
             stopAutomaticDraw();if(pause!=null)status=pause;return;
         }
         boolean captureFallback=shootAfterCaptureMiss.get() && (web.shotWindow(tick)||web.unavailable());
-        if(webCube.get() && webEligible() && !coverMode && !captureFallback && (autoCombat.get() || waitForWeb.get()) && target instanceof PlayerEntity && !web.caught(target)) {
+        if(webCube.get() && webEligible() && !coverMode && !captureFallback && (autoCombat.get() || waitForWeb.get()) && target instanceof Player && !web.caught(target)) {
             stopAutomaticDraw(); status="approaching for webs: "+web.waitReason(); return;
         }
         if(pending!=null || !BoatShotCadence.mayDraw(cycle.stage(),rapid) || tick<nextAutoTick)return;
         if (!player.isUsingItem()) {
-            if(player.getProjectileType(player.getMainHandStack()).isEmpty() && !player.getAbilities().creativeMode) {status="out of arrows";return;}
+            if(player.getProjectile(player.getMainHandItem()).isEmpty() && !player.getAbilities().instabuild) {status="out of arrows";return;}
             if(useBudget.available(System.nanoTime())==0) {status="waiting for item-use allowance";return;}
-            mc.interactionManager.interactItem(player, Hand.MAIN_HAND);
+            mc.gameMode.useItem(player, InteractionHand.MAIN_HAND);
             ownedAutoDraw=player.isUsingItem();
             status=ownedAutoDraw?"drawing bow":"bow draw did not start";
             record("AUTO-DRAW tick=%d started=%b",tick,ownedAutoDraw);
             nextAutoTick = tick + 1;
             return;
         }
-        if(autonomous && player.getActiveHand()==Hand.MAIN_HAND && player.getActiveItem().getItem() instanceof BowItem)ownedAutoDraw=true;
-        int required=autonomous ? BoatShotDamage.clientTicks(BoatShotDefense.drawTicks(target,player.getMainHandStack(),aimBurst()),serverTps())
+        if(autonomous && player.getUsedItemHand()==InteractionHand.MAIN_HAND && player.getUseItem().getItem() instanceof BowItem)ownedAutoDraw=true;
+        int required=autonomous ? BoatShotDamage.clientTicks(BoatShotDefense.drawTicks(target,player.getMainHandItem(),aimBurst()),serverTps())
             : BoatShotCadence.minimumDraw(rapidFire.get(),rapidDrawTicks.get(),chargeTicks.get());
         chargeRequired=required;
-        status="drawing "+player.getItemUseTime()+"/"+required+" | HP "+String.format(Locale.ROOT,"%.1f",target.getHealth());
+        status="drawing "+player.getTicksUsingItem()+"/"+required+" | HP "+String.format(Locale.ROOT,"%.1f",target.getHealth());
 
         if (!BoatShotCadence.mayRelease(cycle.stage(),rapid,tick-releaseTick)
             || rapid && tick-releaseTick<BoatShotDamage.clientTicks(10,serverTps())) return;
-        if (player.getActiveHand() != Hand.MAIN_HAND || !(player.getActiveItem().getItem() instanceof BowItem)
-            || player.getItemUseTime() < required || lastWire == null || corrected.get()) return;
-        Aim aim = validTarget(target) ? aimedShot(player.getItemUseTime()) : null;
+        if (player.getUsedItemHand() != InteractionHand.MAIN_HAND || !(player.getUseItem().getItem() instanceof BowItem)
+            || player.getTicksUsingItem() < required || lastWire == null || corrected.get()) return;
+        Aim aim = validTarget(target) ? aimedShot(player.getTicksUsingItem()) : null;
         if (aim == null) {
             status = target == null ? "waiting for target" : coverMode ? coverRoute==null ? "covered: no reachable firing angle" : "moving to clear firing angle" : aimFailure;
             if (tick-lastWaitLog >= 40) { record("AUTO-WAIT tick=%d reason=%s detail=%s", tick,status,obstruction); lastWaitLog=tick; }
             return;
         }
-        Vec3d delta = new Vec3d(0,aim.delta(),0);
-        if (lastWire.distanceTo(boat.getEntityPos()) > 1e-4 || !phase.shotPathClear(boat,delta)
+        Vec3 delta = new Vec3(0,aim.delta(),0);
+        if (lastWire.distanceTo(boat.position()) > 1e-4 || !phase.shotPathClear(boat,delta)
             || !clearMuzzle(delta,aim.yaw(),aim.pitch()) || !safeTravel(boat,delta)) { status="waiting for burst clearance"; return; }
         nextAutoTick = tick + 1;
-        record("AUTO-RELEASE tick=%d rapid=%b adaptive=%b draw=%d required=%d health=%.2f absorption=%.2f gliding=%b bodyHeight=%.3f velocity=%s",tick,rapid,autonomous,player.getItemUseTime(),required,target.getHealth(),target.getAbsorptionAmount(),target.isGliding(),target.getBoundingBox().getLengthY(),targetVelocity);
+        record("AUTO-RELEASE tick=%d rapid=%b adaptive=%b draw=%d required=%d health=%.2f absorption=%.2f gliding=%b bodyHeight=%.3f velocity=%s",tick,rapid,autonomous,player.getTicksUsingItem(),required,target.getHealth(),target.getAbsorptionAmount(),target.isFallFlying(),target.getBoundingBox().getYsize(),targetVelocity);
         automaticReleasing = true;
-        try { mc.interactionManager.stopUsingItem(player); }
+        try { mc.gameMode.releaseUsingItem(player); }
         finally { automaticReleasing = false; }
     }
 
     private Aim aimedShot(int age) {
         double burst = observedTargetBox().getCenter().y < player.getEyeY() ? -aimBurst() : aimBurst();
-        return aimedShot(age,player.getEyePos().add(0,burst-.1,0),burst);
+        return aimedShot(age,player.getEyePosition().add(0,burst-.1,0),burst);
     }
 
-    private Aim aimedShot(int age,Vec3d muzzle,double burst) {
+    private Aim aimedShot(int age,Vec3 muzzle,double burst) {
         age=bowTicks(age);
-        Box box = observedTargetBox();
+        AABB box = observedTargetBox();
         boolean solved = false;
         obstruction = "";
 
         for (double fraction : new double[] {.5,.65,.35}) {
-            Vec3d point = new Vec3d((box.minX+box.maxX)/2, box.minY+(box.maxY-box.minY)*fraction,(box.minZ+box.maxZ)/2);
-            Vec3d offset = point.add(targetVelocity.multiply(aimLead())).subtract(muzzle);
+            Vec3 point = new Vec3((box.minX+box.maxX)/2, box.minY+(box.maxY-box.minY)*fraction,(box.minZ+box.maxZ)/2);
+            Vec3 offset = point.add(targetVelocity.scale(aimLead())).subtract(muzzle);
             BoatShotAim.Solution solution = BoatShotAim.solveDiscrete(offset.x,offset.y,offset.z,targetVelocity.x,targetVelocity.y,targetVelocity.z,
                 BoatShotAim.bowSpeed(age),burst,.01);
             if (solution == null) continue;
@@ -943,22 +949,22 @@ public final class BoatShot extends Module {
         return null;
     }
 
-    private boolean clearTrajectory(Vec3d muzzle, BoatShotAim.Solution aim, double burst, int age) {
-        Vec3d velocity = Vec3d.fromPolar(aim.pitch(),aim.yaw()).multiply(BoatShotAim.bowSpeed(age)).add(0,burst,0);
+    private boolean clearTrajectory(Vec3 muzzle, BoatShotAim.Solution aim, double burst, int age) {
+        Vec3 velocity = Vec3.directionFromRotation(aim.pitch(),aim.yaw()).scale(BoatShotAim.bowSpeed(age)).add(0,burst,0);
         return BoatShotTrajectory.clearDiscrete(muzzle,velocity,aim.ticks(),observedTargetBox(),targetVelocity,aimLead(),(from,to) -> {
-            var hit = world.raycast(new RaycastContext(from,to,RaycastContext.ShapeType.COLLIDER,RaycastContext.FluidHandling.NONE,player));
+            var hit = world.clip(new ClipContext(from,to,ClipContext.Block.COLLIDER,ClipContext.Fluid.NONE,player));
             if (hit.getType() == HitResult.Type.MISS) return true;
-            obstruction = "block="+hit.getBlockPos()+" state="+world.getBlockState(hit.getBlockPos())+" at="+hit.getPos()+" target="+target.getBoundingBox();
+            obstruction = "block="+hit.getBlockPos()+" state="+world.getBlockState(hit.getBlockPos())+" at="+hit.getLocation()+" target="+target.getBoundingBox();
             return false;
         });
     }
-    private boolean clearMuzzle(Vec3d delta, float yaw, float pitch) {
-        Vec3d direction = Vec3d.fromPolar(pitch, yaw);
+    private boolean clearMuzzle(Vec3 delta, float yaw, float pitch) {
+        Vec3 direction = Vec3.directionFromRotation(pitch, yaw);
 
-        Vec3d eye = player.getEyePos().add(0, -0.1, 0);
-        for (Vec3d start : new Vec3d[] { eye, eye.add(delta) }) {
-            if (world.raycast(new RaycastContext(start, start.add(direction.multiply(2)),
-                RaycastContext.ShapeType.COLLIDER, RaycastContext.FluidHandling.NONE, player)).getType() != HitResult.Type.MISS) return false;
+        Vec3 eye = player.getEyePosition().add(0, -0.1, 0);
+        for (Vec3 start : new Vec3[] { eye, eye.add(delta) }) {
+            if (world.clip(new ClipContext(start, start.add(direction.scale(2)),
+                ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player)).getType() != HitResult.Type.MISS) return false;
         }
         return true;
     }
@@ -967,35 +973,35 @@ public final class BoatShot extends Module {
         if (connection != null && event.connection == connection && !event.isCancelled()) web.offer(event.packet);
         if (connection != null && event.connection == connection && !event.isCancelled()) feedback.offer(event.packet);
         if (connection != null && event.connection == connection && !event.isCancelled()
-            && event.packet instanceof EntitySpawnS2CPacket spawn && spawn.getEntityData() == playerId
-            && (spawn.getEntityType() == EntityType.ARROW || spawn.getEntityType() == EntityType.SPECTRAL_ARROW)) {
+            && event.packet instanceof ClientboundAddEntityPacket spawn && spawn.getData() == playerId
+            && (spawn.getType() == EntityType.ARROW || spawn.getType() == EntityType.SPECTRAL_ARROW)) {
             if (spawns.size() >= 32) spawns.poll();
             spawns.offer(spawn);
         }
         if (connection != null && event.connection == connection
-            && !event.isCancelled() && (event.packet instanceof VehicleMoveS2CPacket || event.packet instanceof PlayerPositionLookS2CPacket)) corrected.set(true);
+            && !event.isCancelled() && (event.packet instanceof ClientboundMoveVehiclePacket || event.packet instanceof ClientboundPlayerPositionPacket)) corrected.set(true);
     }
 
     private void observeArrows() {
-        EntitySpawnS2CPacket spawn;
+        ClientboundAddEntityPacket spawn;
         while ((spawn = spawns.poll()) != null) {
-            if (seenArrows.put(spawn.getEntityId(),true)!=null) continue;
+            if (seenArrows.put(spawn.getId(),true)!=null) continue;
             while(seenArrows.size()>4096)seenArrows.remove(seenArrows.keySet().iterator().next());
-            arrows.put(spawn.getEntityId(), tick + 200);
+            arrows.put(spawn.getId(), tick + 200);
             while (arrows.size() > 32) arrows.remove(arrows.keySet().iterator().next());
-            record("ARROW tick=%d id=%d velocity=%s speed=%.3f position=(%.5f,%.5f,%.5f)", tick, spawn.getEntityId(), spawn.getVelocity(), spawn.getVelocity().length(),spawn.getX(),spawn.getY(),spawn.getZ());
+            record("ARROW tick=%d id=%d velocity=%s speed=%.3f position=(%.5f,%.5f,%.5f)", tick, spawn.getId(), spawn.getMovement(), spawn.getMovement().length(),spawn.getX(),spawn.getY(),spawn.getZ());
             if (cycle.stage() == BoatShotCycle.Stage.WAIT_CLEAR && shotArrow == -1 && tick-releaseTick<=20
-                && spawn.getVelocity().length()>1 && shotOrigin!=null
-                && new Vec3d(spawn.getX(),spawn.getY(),spawn.getZ()).distanceTo(shotOrigin)<lastBoost+8) {
-                shotArrow = spawn.getEntityId();
-                if (chatInfo.get()) info("Server arrow spawn speed: %.2f b/t.", spawn.getVelocity().length());
+                && spawn.getMovement().length()>1 && shotOrigin!=null
+                && new Vec3(spawn.getX(),spawn.getY(),spawn.getZ()).distanceTo(shotOrigin)<lastBoost+8) {
+                shotArrow = spawn.getId();
+                if (chatInfo.get()) info("Server arrow spawn speed: %.2f b/t.", spawn.getMovement().length());
             }
         }
         arrows.entrySet().removeIf(entry -> tick > entry.getValue());
         if (targetPosition != null) for(var entry:arrows.entrySet()) {
             if(tick-entry.getValue()+200>8)continue;
-            Entity tracked=world.getEntityById(entry.getKey());
-            if(tracked!=null)record("ARROW-TRACK tick=%d id=%d position=%s target=%d targetPosition=%s velocity=%s",tick,entry.getKey(),tracked.getEntityPos(),target.getId(),targetPosition,targetVelocity);
+            Entity tracked=world.getEntity(entry.getKey());
+            if(tracked!=null)record("ARROW-TRACK tick=%d id=%d position=%s target=%d targetPosition=%s velocity=%s",tick,entry.getKey(),tracked.position(),target.getId(),targetPosition,targetVelocity);
         }
         if (cycle.stage() != BoatShotCycle.Stage.WAIT_CLEAR || !driving()) return;
         if (feedback.hitConfirmed(shotArrow)) {
@@ -1003,10 +1009,10 @@ public final class BoatShot extends Module {
             cycle.arrowClear();
             return;
         }
-        Entity entity = world.getEntityById(shotArrow);
-        if (entity instanceof PersistentProjectileEntity arrow && !arrow.getBoundingBox().intersects(boat.getBoundingBox().expand(2))) {
-            Vec3d separation = arrow.getEntityPos().subtract(boat.getBoundingBox().getCenter());
-            if (separation.dotProduct(arrow.getVelocity()) > 0 || ((ProjectileInGroundAccessor) arrow).meteor$invokeIsInGround()) {
+        Entity entity = world.getEntity(shotArrow);
+        if (entity instanceof AbstractArrow arrow && !arrow.getBoundingBox().intersects(boat.getBoundingBox().inflate(2))) {
+            Vec3 separation = arrow.position().subtract(boat.getBoundingBox().getCenter());
+            if (separation.dot(arrow.getDeltaMovement()) > 0 || ((ProjectileInGroundAccessor) arrow).meteor$invokeIsInGround()) {
                 record("CLEAR tick=%d id=%d", tick, shotArrow);
                 cycle.arrowClear();
                 return;
@@ -1018,7 +1024,7 @@ public final class BoatShot extends Module {
         }
     }
 
-    public boolean safeTravel(AbstractBoatEntity candidate, Vec3d step) {
+    public boolean safeTravel(AbstractBoat candidate, Vec3 step) {
         if (candidate != boat || !driving()) return true;
         boolean crystals = protectCrystals();
         if (crystals != crystalsProtected) {
@@ -1029,16 +1035,16 @@ public final class BoatShot extends Module {
             travelBlockReason=crystals?"crystal or web danger":"web or hazardous block";
             return false;
         }
-        if (step.lengthSquared() < 1e-10) return true;
-        Box hull = candidate.getBoundingBox().expand(0.4);
+        if (step.lengthSqr() < 1e-10) return true;
+        AABB hull = candidate.getBoundingBox().inflate(0.4);
         for (int id : arrows.keySet()) {
-            if (!(world.getEntityById(id) instanceof PersistentProjectileEntity arrow)
+            if (!(world.getEntity(id) instanceof AbstractArrow arrow)
                 || ((ProjectileInGroundAccessor) arrow).meteor$invokeIsInGround()) continue;
-            Vec3d start = arrow.getEntityPos();
+            Vec3 start = arrow.position();
 
             if (hull.contains(start)) continue;
-            Vec3d end = start.add(arrow.getVelocity()).subtract(step);
-            if (hull.contains(end) || hull.raycast(start, end).isPresent()) {
+            Vec3 end = start.add(arrow.getDeltaMovement()).subtract(step);
+            if (hull.contains(end) || hull.clip(start, end).isPresent()) {
                 travelBlockReason="own arrow ahead";
                 record("TRAVEL-BLOCK tick=%d arrow=%d step=%s", tick, id, step);
                 return false;
@@ -1053,8 +1059,8 @@ public final class BoatShot extends Module {
         if (!combatCrystalGuard.get()) return true;
         return web.busy() || pending!=null || cycle.stage()!=BoatShotCycle.Stage.IDLE
             || inventoryFollowAllowed()
-            || player.isUsingItem() && player.getActiveItem().getItem() instanceof BowItem
-            || follows() && validTarget(target) && player.getMainHandStack().getItem() instanceof BowItem;
+            || player.isUsingItem() && player.getUseItem().getItem() instanceof BowItem
+            || follows() && validTarget(target) && player.getMainHandItem().getItem() instanceof BowItem;
     }
 
     @Override public WWidget getWidget(GuiTheme theme) {
@@ -1087,8 +1093,8 @@ public final class BoatShot extends Module {
         sendingRelease = true;
         try {
 
-            network.sendPacket(new UpdateSelectedSlotC2SPacket((selected + 1) % 9));
-            network.sendPacket(new UpdateSelectedSlotC2SPacket(selected));
+            network.send(new ServerboundSetCarriedItemPacket((selected + 1) % 9));
+            network.send(new ServerboundSetCarriedItemPacket(selected));
         } finally { sendingRelease = false; }
     }
 
@@ -1121,14 +1127,14 @@ public final class BoatShot extends Module {
         spawns.clear();
         arrows.clear();
         seenArrows.clear(); useBudget.reset(); ownedAutoDraw=false; suppressAcquire=false; powerRejected=false;
-        escapeY=Double.NaN;escapeAway=Vec3d.ZERO;lastFlow="";chargeRequired=0;
+        escapeY=Double.NaN;escapeAway=Vec3.ZERO;lastFlow="";chargeRequired=0;
         feedback.reset();
         web.reset(); guard.reset(); navigator.reset(); resetCover();
         prediction.reset(); predictedLead=2; crystalsProtected=false;
         drawLock.reset();
         target = null;
         targetPosition = null;
-        targetVelocity = Vec3d.ZERO;
+        targetVelocity = Vec3.ZERO;
         playerId = shotArrow = -1;
         lastBoostTick = -100;
         lastBoost = 0;
@@ -1158,7 +1164,7 @@ public final class BoatShot extends Module {
     private void openLog() {
         if (!debugFile.get()) return;
         try {
-            Path directory = mc.runDirectory.toPath().resolve("boat-shot");
+            Path directory = mc.gameDirectory.toPath().resolve("boat-shot");
             Files.createDirectories(directory);
             String time = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS"));
             log = new PrintWriter(Files.newBufferedWriter(directory.resolve("shot-" + time + ".log"), StandardCharsets.UTF_8));
@@ -1172,6 +1178,6 @@ public final class BoatShot extends Module {
     }
 
     @Override public String getInfoString() {
-        return status+(webCube.get() && follows() && target instanceof PlayerEntity && !web.busy()?" | web: "+(webEligible()?web.waitReason():"above capture height; shooting only"):"");
+        return status+(webCube.get() && follows() && target instanceof Player && !web.busy()?" | web: "+(webEligible()?web.waitReason():"above capture height; shooting only"):"");
     }
 }

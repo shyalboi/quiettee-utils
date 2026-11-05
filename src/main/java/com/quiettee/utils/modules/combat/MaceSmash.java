@@ -26,30 +26,29 @@ import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.data.DataTracker;
-import net.minecraft.entity.data.TrackedDataHandlerRegistry;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.network.ClientConnection;
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.network.packet.s2c.play.EntityTrackerUpdateS2CPacket;
-import net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket;
-import net.minecraft.util.Hand;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Box;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
-
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
+import net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.network.syncher.EntityDataSerializers;
+import net.minecraft.network.syncher.SynchedEntityData;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -619,7 +618,7 @@ public class MaceSmash extends Module {
     private int webDelayLeft;
     private int telWebs;
     private int webNoItemThrottle;
-    private final BlockPos.Mutable webScanPos = new BlockPos.Mutable();
+    private final BlockPos.MutableBlockPos webScanPos = new BlockPos.MutableBlockPos();
 
     private int telTicks, telSwings, telLanded, telFresh;
     private double telDmg;
@@ -656,17 +655,17 @@ public class MaceSmash extends Module {
     private final ArrayDeque<String> oTrace = new ArrayDeque<>();
     private double prevRealX, prevRealZ, sweepX0, sweepZ0;
     private static volatile boolean keepLookArmed;
-    private Vec3d lastWirePos;
+    private Vec3 lastWirePos;
     private double oStartY;
     private boolean correcting, correctionWasDesynced;
-    private Vec3d correctionFrom;
+    private Vec3 correctionFrom;
     private double correctionGhostY;
     private String correctionTrace;
     private Entity statePlayer;
-    private ClientWorld stateWorld;
-    private ClientConnection stateConnection;
+    private ClientLevel stateWorld;
+    private Connection stateConnection;
 
-    private record ServerObservation(ClientConnection connection, Entity player, Boolean gliding, boolean landed) {}
+    private record ServerObservation(Connection connection, Entity player, Boolean gliding, boolean landed) {}
     private final ConcurrentLinkedQueue<ServerObservation> observations = new ConcurrentLinkedQueue<>();
 
     private enum PPhase { Charge, Dive }
@@ -709,7 +708,7 @@ public class MaceSmash extends Module {
         stopHoming();
         if (!resumeOffset) {
             offset = 0;
-            lastWirePos = mc.player == null ? null : mc.player.getEntityPos();
+            lastWirePos = mc.player == null ? null : mc.player.position();
         }
         observations.clear();
         correcting = correctionWasDesynced = false;
@@ -782,20 +781,20 @@ public class MaceSmash extends Module {
     }
 
     private boolean sameSession() {
-        return mc.player != null && mc.player == statePlayer && mc.world != null && mc.world == stateWorld
-            && mc.getNetworkHandler() != null && mc.getNetworkHandler().getConnection() == stateConnection;
+        return mc.player != null && mc.player == statePlayer && mc.level != null && mc.level == stateWorld
+            && mc.getConnection() != null && mc.getConnection().getConnection() == stateConnection;
     }
 
     private void bindSession() {
         statePlayer = mc.player;
-        stateWorld = mc.world;
-        stateConnection = mc.getNetworkHandler() == null ? null : mc.getNetworkHandler().getConnection();
+        stateWorld = mc.level;
+        stateConnection = mc.getConnection() == null ? null : mc.getConnection().getConnection();
     }
 
     private void resetForSession() {
         bindSession();
         offset = 0;
-        lastWirePos = mc.player == null ? null : mc.player.getEntityPos();
+        lastWirePos = mc.player == null ? null : mc.player.position();
         serverOff = serverAtDive = restSet = havePrevRealY = false;
         correcting = correctionWasDesynced = false;
         target = telTarget = null;
@@ -834,13 +833,13 @@ public class MaceSmash extends Module {
 
     private boolean valid(Entity e, boolean acquiring) {
         if (e == mc.player || e == mc.getCameraEntity()) return false;
-        if (!(e instanceof LivingEntity le) || le.isDead() || !e.isAlive()) return false;
+        if (!(e instanceof LivingEntity le) || le.isDeadOrDying() || !e.isAlive()) return false;
         if (!entities.get().contains(e.getType())) return false;
-        if (e instanceof PlayerEntity p && (p.isCreative() || p.isSpectator() || !Friends.get().shouldAttack(p))) return false;
+        if (e instanceof Player p && (p.isCreative() || p.isSpectator() || !Friends.get().shouldAttack(p))) return false;
         if (!ignoreWalls.get() && !PlayerUtils.canSeeEntity(e)) return false;
 
         boolean locked = lockTarget.get() && !acquiring;
-        boolean chasing = follow.get() && mc.player.isGliding();
+        boolean chasing = follow.get() && mc.player.isFallFlying();
 
         if (chasing) {
             double dx = e.getX() - mc.player.getX(), dz = e.getZ() - mc.player.getZ();
@@ -850,12 +849,12 @@ public class MaceSmash extends Module {
         } else if (PlayerUtils.distanceTo(e) > maxDive.get() + reach.get() + 6) return false;
 
         if (!locked && fov.get() < 360) {
-            Box b = e.getBoundingBox();
-            Vec3d eye = mc.player.getEyePos();
-            Vec3d dir = new Vec3d(e.getX() - eye.x, (b.minY + b.maxY) * 0.5 - eye.y, e.getZ() - eye.z);
-            if (dir.lengthSquared() > 1e-6) {
-                double dot = mc.player.getRotationVec(1f).dotProduct(dir.normalize());
-                if (Math.toDegrees(Math.acos(MathHelper.clamp(dot, -1, 1))) > fov.get() / 2) return false;
+            AABB b = e.getBoundingBox();
+            Vec3 eye = mc.player.getEyePosition();
+            Vec3 dir = new Vec3(e.getX() - eye.x, (b.minY + b.maxY) * 0.5 - eye.y, e.getZ() - eye.z);
+            if (dir.lengthSqr() > 1e-6) {
+                double dot = mc.player.getViewVector(1f).dot(dir.normalize());
+                if (Math.toDegrees(Math.acos(Mth.clamp(dot, -1, 1))) > fov.get() / 2) return false;
             }
         }
 
@@ -872,16 +871,16 @@ public class MaceSmash extends Module {
     }
 
     private boolean haveMace() {
-        return mc.player.getMainHandStack().isOf(Items.MACE) || (autoSwap.get() && InvUtils.findInHotbar(Items.MACE).found());
+        return mc.player.getMainHandItem().is(Items.MACE) || (autoSwap.get() && InvUtils.findInHotbar(Items.MACE).found());
     }
 
     private boolean charged() {
         if (chain()) return true;
-        return !fullChargeOnly.get() || mc.player.getAttackCooldownProgress(0) >= 1;
+        return !fullChargeOnly.get() || mc.player.getAttackStrengthScale(0) >= 1;
     }
 
     private double eyeHeight() {
-        if (!mc.player.isGliding()) return mc.player.getEyeHeight(mc.player.getPose());
+        if (!mc.player.isFallFlying()) return mc.player.getEyeHeight(mc.player.getPose());
         return carryMode() ? EYE_STANDING : EYE_GLIDING;
     }
 
@@ -895,14 +894,14 @@ public class MaceSmash extends Module {
         return bandFor(e.getBoundingBox(), eye);
     }
 
-    private Band bandFor(Box b, double eye) {
+    private Band bandFor(AABB b, double eye) {
         double x = mc.player.getX(), z = mc.player.getZ();
         double hx = Math.max(Math.max(b.minX - x, x - b.maxX), 0);
         double hz = Math.max(Math.max(b.minZ - z, z - b.maxZ), 0);
         return bandAt(b, eye, Math.sqrt(hx * hx + hz * hz));
     }
 
-    private Band bandAt(Box b, double eye, double h) {
+    private Band bandAt(AABB b, double eye, double h) {
         double r = reach.get() - 0.05;
         if (h >= r) return null;
         double v = Math.sqrt(r * r - h * h);
@@ -910,7 +909,7 @@ public class MaceSmash extends Module {
     }
 
     private double[] window(Entity e) {
-        Box b = e.getBoundingBox();
+        AABB b = e.getBoundingBox();
         if (occam()) {
             Band band = bandAt(b, EYE_GLIDING, 0);
             if (band == null) return null;
@@ -929,17 +928,17 @@ public class MaceSmash extends Module {
     }
 
     private boolean spaceFree(double x, double y, double z) {
-        return mc.world.isSpaceEmpty(mc.player, mc.player.getBoundingBox().offset(x - mc.player.getX(), y - mc.player.getY(), z - mc.player.getZ()));
+        return mc.level.noCollision(mc.player, mc.player.getBoundingBox().move(x - mc.player.getX(), y - mc.player.getY(), z - mc.player.getZ()));
     }
 
     private void followTick() {
         fHorizontal = fVertical = fMoving = false;
-        if (!follow.get() || target == null || !mc.player.isGliding()) return;
+        if (!follow.get() || target == null || !mc.player.isFallFlying()) return;
 
         double px = mc.player.getX(), py = mc.player.getY(), pz = mc.player.getZ();
         double lead = followLead.get();
-        double tx = target.getX() + (target.getX() - target.lastX) * lead;
-        double tz = target.getZ() + (target.getZ() - target.lastZ) * lead;
+        double tx = target.getX() + (target.getX() - target.xo) * lead;
+        double tz = target.getZ() + (target.getZ() - target.zo) * lead;
         double dx = tx - px, dz = tz - pz;
         double h = Math.sqrt(dx * dx + dz * dz);
         double excess = h - followRadius.get();
@@ -964,8 +963,8 @@ public class MaceSmash extends Module {
                 double maxV = followVerticalSpeed.get();
                 if (vf == VerticalFollow.Hold) {
 
-                    double ty = target.getBoundingBox().maxY + (target.getY() - target.lastY) * lead + followHeight.get();
-                    ty = MathHelper.clamp(ty, lo, hi);
+                    double ty = target.getBoundingBox().maxY + (target.getY() - target.yo) * lead + followHeight.get();
+                    ty = Mth.clamp(ty, lo, hi);
                     double dy = ty - py, tol = 0.5;
                     if (Math.abs(dy) > tol) { fVy = Math.signum(dy) * Math.min(Math.abs(dy) - tol, maxV); fMoving = true; }
                     fVertical = true;
@@ -986,20 +985,20 @@ public class MaceSmash extends Module {
 
     @EventHandler(priority = EventPriority.LOWEST)
     private void onPlayerMove(PlayerMoveEvent event) {
-        if (mc.player == null || mc.world == null || !fHorizontal || !mc.player.isGliding()) return;
+        if (mc.player == null || mc.level == null || !fHorizontal || !mc.player.isFallFlying()) return;
         double vx = fVx, vz = fVz;
         double vy = fVertical ? fVy : event.movement.y;
         int cx = (int) Math.floor((mc.player.getX() + vx) / 16), cz = (int) Math.floor((mc.player.getZ() + vz) / 16);
-        if (!mc.world.getChunkManager().isChunkLoaded(cx, cz)) { vx = 0; vz = 0; }
+        if (!mc.level.getChunkSource().hasChunk(cx, cz)) { vx = 0; vz = 0; }
         ((IVec3d) event.movement).meteor$set(vx, vy, vz);
     }
 
     private void cameraTick() {
         if (!cameraTrack.get() || target == null) return;
-        Box b = target.getBoundingBox();
-        Vec3d c = new Vec3d((b.minX + b.maxX) * 0.5, (b.minY + b.maxY) * 0.5, (b.minZ + b.maxZ) * 0.5);
-        mc.player.setYaw((float) Rotations.getYaw(c));
-        mc.player.setPitch((float) MathHelper.clamp(Rotations.getPitch(c), -90, 90));
+        AABB b = target.getBoundingBox();
+        Vec3 c = new Vec3((b.minX + b.maxX) * 0.5, (b.minY + b.maxY) * 0.5, (b.minZ + b.maxZ) * 0.5);
+        mc.player.setYRot((float) Rotations.getYaw(c));
+        mc.player.setXRot((float) Mth.clamp(Rotations.getPitch(c), -90, 90));
     }
 
     private record Plan(double botOff, double topOff, double strikeOff) {}
@@ -1022,13 +1021,13 @@ public class MaceSmash extends Module {
 
     private boolean free(double off) {
         double x = mc.player.getX(), y = mc.player.getY() + off, z = mc.player.getZ();
-        double h = (mc.player.isGliding() && !carryMode()) ? 0.6 : 1.8;
-        return mc.world.isSpaceEmpty(mc.player, new Box(x - 0.3, y, z - 0.3, x + 0.3, y + h, z + 0.3));
+        double h = (mc.player.isFallFlying() && !carryMode()) ? 0.6 : 1.8;
+        return mc.level.noCollision(mc.player, new AABB(x - 0.3, y, z - 0.3, x + 0.3, y + h, z + 0.3));
     }
 
     private boolean columnFree(double lo, double hi, double boxHeight) {
         double x = mc.player.getX(), z = mc.player.getZ();
-        return mc.world.isSpaceEmpty(mc.player, new Box(x - 0.3, Math.min(lo, hi), z - 0.3, x + 0.3, Math.max(lo, hi) + boxHeight, z + 0.3));
+        return mc.level.noCollision(mc.player, new AABB(x - 0.3, Math.min(lo, hi), z - 0.3, x + 0.3, Math.max(lo, hi) + boxHeight, z + 0.3));
     }
 
     private void sendPos(double off) {
@@ -1041,27 +1040,27 @@ public class MaceSmash extends Module {
     }
 
     private void sendPosRaw(double y) {
-        PlayerMoveC2SPacket p = new PlayerMoveC2SPacket.PositionAndOnGround(mc.player.getX(), y, mc.player.getZ(), false, mc.player.horizontalCollision);
+        ServerboundMovePlayerPacket p = new ServerboundMovePlayerPacket.Pos(mc.player.getX(), y, mc.player.getZ(), false, mc.player.horizontalCollision);
         ((IPlayerMoveC2SPacket) p).meteor$setTag(TAG);
-        mc.getNetworkHandler().sendPacket(p);
+        mc.getConnection().send(p);
     }
 
     private int windBurstLevel() {
         if (mc.player == null) return 0;
-        ItemStack mace = mc.player.getMainHandStack().isOf(Items.MACE) ? mc.player.getMainHandStack() : null;
+        ItemStack mace = mc.player.getMainHandItem().is(Items.MACE) ? mc.player.getMainHandItem() : null;
         if (mace == null) {
             FindItemResult r = InvUtils.findInHotbar(Items.MACE);
             if (!r.found()) return 0;
-            mace = mc.player.getInventory().getStack(r.slot());
+            mace = mc.player.getInventory().getItem(r.slot());
         }
-        for (var entry : mace.getEnchantments().getEnchantmentEntries()) {
-            if (entry.getKey().matchesId(Identifier.ofVanilla("wind_burst"))) return entry.getIntValue();
+        for (var entry : mace.getEnchantments().entrySet()) {
+            if (entry.getKey().is(Identifier.withDefaultNamespace("wind_burst"))) return entry.getIntValue();
         }
         return 0;
     }
 
     private void sendToggle() {
-        mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+        mc.getConnection().send(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
     }
 
     private void unglide() {
@@ -1075,18 +1074,18 @@ public class MaceSmash extends Module {
     private void attackWithMace(Entity t) {
         int prevSlot = -1;
         boolean swapped = false;
-        if (!mc.player.getMainHandStack().isOf(Items.MACE)) {
+        if (!mc.player.getMainHandItem().is(Items.MACE)) {
             FindItemResult mace = InvUtils.findInHotbar(Items.MACE);
             if (mace.found()) { prevSlot = mc.player.getInventory().getSelectedSlot(); InvUtils.swap(mace.slot(), false); swapped = true; }
         }
-        mc.interactionManager.attackEntity(mc.player, t);
-        mc.player.swingHand(Hand.MAIN_HAND);
+        mc.gameMode.attack(mc.player, t);
+        mc.player.swing(InteractionHand.MAIN_HAND);
         if (swapped && swapBack.get() && prevSlot != -1) InvUtils.swap(prevSlot, false);
     }
 
     private void rewriteOwnMove(PacketEvent.Send event) {
         if (correcting || !sameSession()) return;
-        if (!(event.packet instanceof PlayerMoveC2SPacket p) || !p.changesPosition()) return;
+        if (!(event.packet instanceof ServerboundMovePlayerPacket p) || !p.hasPosition()) return;
         if (((IPlayerMoveC2SPacket) p).meteor$getTag() == TAG) return;
         posSentThisTick = true;
         if (!desynced()) return;
@@ -1096,8 +1095,8 @@ public class MaceSmash extends Module {
 
     private void recordWirePosition(PacketEvent.Sent event) {
         if (!sameSession() || event.connection != stateConnection) return;
-        if (event.packet instanceof PlayerMoveC2SPacket p && p.changesPosition()) {
-            lastWirePos = new Vec3d(p.getX(mc.player.getX()), p.getY(mc.player.getY()), p.getZ(mc.player.getZ()));
+        if (event.packet instanceof ServerboundMovePlayerPacket p && p.hasPosition()) {
+            lastWirePos = new Vec3(p.getX(mc.player.getX()), p.getY(mc.player.getY()), p.getZ(mc.player.getZ()));
         }
     }
 
@@ -1114,7 +1113,7 @@ public class MaceSmash extends Module {
         double up = Math.max(riseStep.get(), realDY), down = Math.max(step.get(), -realDY);
         double lo = -down - realDY, hi = up - realDY;
         if (lo > hi) lo = hi = -realDY;
-        double d = MathHelper.clamp(want - offset, lo, hi);
+        double d = Mth.clamp(want - offset, lo, hi);
         offset += d;
         if (Math.abs(offset - want) < 1e-9) offset = want;
         serverDY = realDY + d;
@@ -1158,9 +1157,9 @@ public class MaceSmash extends Module {
         @EventHandler
         private void onCorrectionAfter(PlayerPositionLookEvent.After event) {
             offset = 0;
-            lastWirePos = sameSession() ? mc.player.getEntityPos() : null;
+            lastWirePos = sameSession() ? mc.player.position() : null;
             correcting = false;
-            mc.send(() -> { if (!isActive()) stopHoming(); });
+            mc.schedule(() -> { if (!isActive()) stopHoming(); });
         }
     }
 
@@ -1180,7 +1179,7 @@ public class MaceSmash extends Module {
     @EventHandler(priority = EventPriority.HIGHEST)
     private void onReceiveFirst(PacketEvent.Receive event) {
 
-        if (event.packet instanceof EntityVelocityUpdateS2CPacket p && sameSession() && p.getEntityId() == mc.player.getId() && isLandedMarker(p.getVelocity().y)) {
+        if (event.packet instanceof ClientboundSetEntityMotionPacket p && sameSession() && p.getId() == mc.player.getId() && isLandedMarker(p.getMovement().y)) {
             observations.add(new ServerObservation(event.connection, mc.player, null, true));
         }
     }
@@ -1192,8 +1191,8 @@ public class MaceSmash extends Module {
     private void drainObservations() {
         ServerObservation observation;
         while ((observation = observations.poll()) != null) {
-            if (mc.player == null || mc.getNetworkHandler() == null
-                || observation.connection != mc.getNetworkHandler().getConnection() || observation.player != mc.player) continue;
+            if (mc.player == null || mc.getConnection() == null
+                || observation.connection != mc.getConnection().getConnection() || observation.player != mc.player) continue;
             if (observation.gliding != null) serverGliding = observation.gliding;
             if (observation.landed) telLanded++;
         }
@@ -1206,7 +1205,7 @@ public class MaceSmash extends Module {
         drainObservations();
         correcting = true;
         correctionWasDesynced = desynced();
-        correctionFrom = mc.player.getEntityPos();
+        correctionFrom = mc.player.position();
         correctionGhostY = ghostY();
         correctionTrace = String.join(" → ", oTrace);
         if (correctionWasDesynced && keepCamera.get()) keepLookArmed = true;
@@ -1215,7 +1214,7 @@ public class MaceSmash extends Module {
     @EventHandler
     private void onCorrectionAfter(PlayerPositionLookEvent.After event) {
         if (mc.player == null) { correcting = correctionWasDesynced = false; return; }
-        lastWirePos = mc.player.getEntityPos();
+        lastWirePos = mc.player.position();
         havePrevRealY = false;
         correcting = false;
         if (!correctionWasDesynced) return;
@@ -1251,19 +1250,19 @@ public class MaceSmash extends Module {
     private void onReceive(PacketEvent.Receive event) {
         if (!sameSession()) return;
 
-        if (event.packet instanceof EntityTrackerUpdateS2CPacket p && p.id() == mc.player.getId()) {
-            for (DataTracker.SerializedEntry<?> en : p.trackedValues()) {
+        if (event.packet instanceof ClientboundSetEntityDataPacket p && p.id() == mc.player.getId()) {
+            for (SynchedEntityData.DataValue<?> en : p.packedItems()) {
                 if (en.id() == TRACKED_FLAGS_ID && en.value() instanceof Byte b) {
                     observations.add(new ServerObservation(event.connection, mc.player, (b & 0x80) != 0, false));
                 }
             }
         }
 
-        if (carryMode() && desynced() && event.packet instanceof EntityTrackerUpdateS2CPacket p && p.id() == mc.player.getId()) {
-            List<DataTracker.SerializedEntry<?>> list = p.trackedValues();
+        if (carryMode() && desynced() && event.packet instanceof ClientboundSetEntityDataPacket p && p.id() == mc.player.getId()) {
+            List<SynchedEntityData.DataValue<?>> list = p.packedItems();
             try {
-                list.removeIf(en -> (en.id() == TRACKED_FLAGS_ID && Objects.equals(en.handler(), TrackedDataHandlerRegistry.BYTE))
-                    || (en.id() == TRACKED_POSE_ID && Objects.equals(en.handler(), TrackedDataHandlerRegistry.ENTITY_POSE)));
+                list.removeIf(en -> (en.id() == TRACKED_FLAGS_ID && Objects.equals(en.serializer(), EntityDataSerializers.BYTE))
+                    || (en.id() == TRACKED_POSE_ID && Objects.equals(en.serializer(), EntityDataSerializers.POSE)));
                 if (list.isEmpty()) event.cancel();
             } catch (UnsupportedOperationException e) {
                 if (list.stream().allMatch(en -> en.id() == TRACKED_FLAGS_ID || en.id() == TRACKED_POSE_ID)) event.cancel();
@@ -1273,7 +1272,7 @@ public class MaceSmash extends Module {
 
     @EventHandler
     private void onTickPre(TickEvent.Pre event) {
-        if (mc.player == null || mc.world == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.level == null || mc.getConnection() == null) return;
         if (!sameSession()) resetForSession();
         drainObservations();
         posSentThisTick = false;
@@ -1284,7 +1283,7 @@ public class MaceSmash extends Module {
         if (chargeTicks < 1000) chargeTicks++;
         if (recentSetbacks > 0 && --setbackDecay <= 0) { recentSetbacks--; setbackDecay = 200; }
 
-        if ((serverOff || (carryMode() && phase == Phase.Descend)) && !mc.player.isGliding()) mc.player.startGliding();
+        if ((serverOff || (carryMode() && phase == Phase.Descend)) && !mc.player.isFallFlying()) mc.player.startFallFlying();
 
         oTick++;
         if (occam()) {
@@ -1313,18 +1312,18 @@ public class MaceSmash extends Module {
 
         boolean aim = !occam() && (chain() ? restSet : (phase != Phase.Idle || strikeNow));
         if (faceTarget.get() && target != null && aim) {
-            Box b = target.getBoundingBox();
+            AABB b = target.getBoundingBox();
             double ex = mc.player.getX(), ez = mc.player.getZ();
             double ey = chain() ? restY - hopNow + EYE_GLIDING : mc.player.getY() + offset + eyeHeight();
             double dx = (b.minX + b.maxX) * 0.5 - ex, dy = (b.minY + b.maxY) * 0.5 - ey, dz = (b.minZ + b.maxZ) * 0.5 - ez;
             double pitch = -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
-            Rotations.rotate(Rotations.getYaw(target), MathHelper.clamp(pitch, -90, 90), 100);
+            Rotations.rotate(Rotations.getYaw(target), Mth.clamp(pitch, -90, 90), 100);
         }
     }
 
     @EventHandler(priority = EventPriority.HIGH)
     private void onSendPre(SendMovementPacketsEvent.Pre event) {
-        if (mc.player == null || mc.world == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.level == null || mc.getConnection() == null) return;
         if (!sameSession()) resetForSession();
         drainObservations();
         if (occam()) {
@@ -1341,7 +1340,7 @@ public class MaceSmash extends Module {
     private void onSend(PacketEvent.Send event) {
         rewriteOwnMove(event);
 
-        if (sameSession() && event.packet instanceof ClientCommandC2SPacket c && c.getMode() == ClientCommandC2SPacket.Mode.START_FALL_FLYING && serverGliding != null) serverGliding = !serverGliding;
+        if (sameSession() && event.packet instanceof ServerboundPlayerCommandPacket c && c.getAction() == ServerboundPlayerCommandPacket.Action.START_FALL_FLYING && serverGliding != null) serverGliding = !serverGliding;
     }
 
     @EventHandler
@@ -1351,7 +1350,7 @@ public class MaceSmash extends Module {
 
     @EventHandler
     private void onSendPost(SendMovementPacketsEvent.Post event) {
-        if (mc.player == null || mc.world == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.level == null || mc.getConnection() == null) return;
         if (occam()) occamPost();
         else if (chain()) chainPost();
         else hoverPost();
@@ -1410,7 +1409,7 @@ public class MaceSmash extends Module {
         restMoved = false;
         double realY = mc.player.getY();
 
-        Band band = (target != null && mc.player.isGliding()) ? band(target, EYE_GLIDING) : null;
+        Band band = (target != null && mc.player.isFallFlying()) ? band(target, EYE_GLIDING) : null;
         if (band == null) {
 
             if (restSet && ++lostTicks <= (fMoving ? 60 : 20)) {
@@ -1420,7 +1419,7 @@ public class MaceSmash extends Module {
                 restMoved = walkOffsetToward(0);
             }
             if (target == null) report("no target in reach");
-            else status = !mc.player.isGliding() ? "not gliding" : fMoving ? "following · closing in" : "target too far sideways";
+            else status = !mc.player.isFallFlying() ? "not gliding" : fMoving ? "following · closing in" : "target too far sideways";
             return;
         }
         lostTicks = 0;
@@ -1459,7 +1458,7 @@ public class MaceSmash extends Module {
         if (!charged()) { status = "charging"; return; }
         if (!columnFree(restY - hopNow, restY, 0.6)) { status = "dive blocked"; return; }
 
-        dumpThisTick = mc.player.getAttackCooldownProgress(0) > 0.9;
+        dumpThisTick = mc.player.getAttackStrengthScale(0) > 0.9;
         smashThisTick = true;
     }
 
@@ -1563,11 +1562,11 @@ public class MaceSmash extends Module {
         pReglideIn = 0;
     }
 
-    private record OPlan(double top, double bot, Band band, Box box) {}
+    private record OPlan(double top, double bot, Band band, AABB box) {}
 
-    private Box leadBox(Entity e) {
+    private AABB leadBox(Entity e) {
         double lead = Math.min(5.0, PlayerUtils.getPing() / 50.0);
-        return e.getBoundingBox().offset((e.getX() - e.lastX) * lead, (e.getY() - e.lastY) * lead, (e.getZ() - e.lastZ) * lead);
+        return e.getBoundingBox().move((e.getX() - e.xo) * lead, (e.getY() - e.yo) * lead, (e.getZ() - e.zo) * lead);
     }
 
     private int oRungsFit(OPlan p) {
@@ -1588,7 +1587,7 @@ public class MaceSmash extends Module {
     }
 
     private OPlan occamPlan(Entity e, double realY, boolean quiet) {
-        Box b = leadBox(e);
+        AABB b = leadBox(e);
         Band band = bandFor(b, EYE_GLIDING);
         if (band == null) { if (!quiet) status = "target too far sideways"; return null; }
         if (realY - band.top > maxDive.get()) { if (!quiet) report(String.format("too high: hover lower or raise max-dive (need %.0f)", realY - band.top)); return null; }
@@ -1605,7 +1604,7 @@ public class MaceSmash extends Module {
         double x0 = havePrevRealY ? sweepX0 : x1, z0 = havePrevRealY ? sweepZ0 : z1;
 
         var sweep = MaceMovementMath.sweptBody(x0, lo, z0, x1, hi, z1, 0.3, 0.6);
-        return mc.world.isSpaceEmpty(mc.player, new Box(sweep.minX(), sweep.minY(), sweep.minZ(), sweep.maxX(), sweep.maxY(), sweep.maxZ()));
+        return mc.level.noCollision(mc.player, new AABB(sweep.minX(), sweep.minY(), sweep.minZ(), sweep.maxX(), sweep.maxY(), sweep.maxZ()));
     }
 
     private void occamPrepare() {
@@ -1626,7 +1625,7 @@ public class MaceSmash extends Module {
         oPlanned = false;
         oKind = "hold";
         OPlan p = null;
-        if (target == null || !mc.player.isGliding()) {
+        if (target == null || !mc.player.isFallFlying()) {
             status = target == null ? "no target in reach" : "not gliding";
             oIdle();
         } else if ((p = occamPlan(target, realY, false)) == null) {
@@ -1671,11 +1670,11 @@ public class MaceSmash extends Module {
         if (faceTarget.get() && p != null) aimAt(p.box, realY + offset + EYE_GLIDING);
     }
 
-    private void aimAt(Box b, double eyeY) {
+    private void aimAt(AABB b, double eyeY) {
         double dx = (b.minX + b.maxX) * 0.5 - mc.player.getX(), dy = (b.minY + b.maxY) * 0.5 - eyeY, dz = (b.minZ + b.maxZ) * 0.5 - mc.player.getZ();
-        double yaw = MathHelper.wrapDegrees(Math.toDegrees(Math.atan2(dz, dx)) - 90);
+        double yaw = Mth.wrapDegrees(Math.toDegrees(Math.atan2(dz, dx)) - 90);
         double pitch = -Math.toDegrees(Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)));
-        Rotations.rotate(yaw, MathHelper.clamp(pitch, -90, 90), 100);
+        Rotations.rotate(yaw, Mth.clamp(pitch, -90, 90), 100);
     }
 
     private void occamDecide(OPlan p, double realY) {
@@ -1960,7 +1959,7 @@ public class MaceSmash extends Module {
         oMove = true;
         oKind = "home";
         double homeDelta = mc.player.getY() - oStartY;
-        oDy = MathHelper.clamp(homeDelta, -occamDive.get(), occamRise.get());
+        oDy = Mth.clamp(homeDelta, -occamDive.get(), occamRise.get());
     }
 
     private void occamPost() {
@@ -1996,10 +1995,10 @@ public class MaceSmash extends Module {
 
     private void webTick() {
         if (!webEnabled.get() || target == null) return;
-        if (webPlayersOnly.get() && !(target instanceof PlayerEntity)) return;
+        if (webPlayersOnly.get() && !(target instanceof Player)) return;
         if (webDelayLeft > 0) { webDelayLeft--; return; }
-        if (webWhen.get() == WebWhen.Airborne && target.isOnGround()) return;
-        if (webWhen.get() == WebWhen.Gliding && !(target instanceof LivingEntity le && le.isGliding())) return;
+        if (webWhen.get() == WebWhen.Airborne && target.onGround()) return;
+        if (webWhen.get() == WebWhen.Gliding && !(target instanceof LivingEntity le && le.isFallFlying())) return;
 
         FindItemResult webs = InvUtils.findInHotbar(Items.COBWEB);
         if (!webs.found()) {
@@ -2008,15 +2007,15 @@ public class MaceSmash extends Module {
         }
 
         double lead = webLead.get();
-        int bx = (int) Math.floor(target.getX() + (target.getX() - target.lastX) * lead);
-        int by = (int) Math.floor(target.getY() + (target.getY() - target.lastY) * lead);
-        int bz = (int) Math.floor(target.getZ() + (target.getZ() - target.lastZ) * lead);
+        int bx = (int) Math.floor(target.getX() + (target.getX() - target.xo) * lead);
+        int by = (int) Math.floor(target.getY() + (target.getY() - target.yo) * lead);
+        int bz = (int) Math.floor(target.getZ() + (target.getZ() - target.zo) * lead);
 
         int placed;
         if (webCells.get() == WebCells.Cube) {
 
             int budget = Math.max(websPerTick.get(), 6);
-            double mvx = target.getX() - target.lastX, mvz = target.getZ() - target.lastZ;
+            double mvx = target.getX() - target.xo, mvz = target.getZ() - target.zo;
             placed = cubeWeb(bx, by, bz, mvx, mvz, webs, budget);
         } else {
             int budget = websPerTick.get();
@@ -2047,7 +2046,7 @@ public class MaceSmash extends Module {
     private int tryWeb(int x, int y, int z, FindItemResult webs, int budget) {
         if (budget <= 0) return 0;
         BlockPos pos = new BlockPos(x, y, z);
-        if (!mc.world.getBlockState(pos).isReplaceable()) return 0;
+        if (!mc.level.getBlockState(pos).canBeReplaced()) return 0;
 
         double ex = lastWirePos != null ? lastWirePos.x : mc.player.getX();
         double ey = ghostY() + EYE_GLIDING;
@@ -2057,10 +2056,10 @@ public class MaceSmash extends Module {
         double dz = Math.max(Math.max(z - ez, ez - (z + 1)), 0);
         if (dx * dx + dy * dy + dz * dz > webRange.get() * webRange.get()) return 0;
 
-        Box cell = new Box(x, y, z, x + 1, y + 1, z + 1);
+        AABB cell = new AABB(x, y, z, x + 1, y + 1, z + 1);
         double m = webSelfClearance.get();
-        if (cell.intersects(mc.player.getBoundingBox().expand(m))) return 0;
-        if (cell.intersects(mc.player.getBoundingBox().offset(ex - mc.player.getX(), ghostY() - mc.player.getY(), ez - mc.player.getZ()).expand(m))) return 0;
+        if (cell.intersects(mc.player.getBoundingBox().inflate(m))) return 0;
+        if (cell.intersects(mc.player.getBoundingBox().move(ex - mc.player.getX(), ghostY() - mc.player.getY(), ez - mc.player.getZ()).inflate(m))) return 0;
 
         if (!webAirPlace.get() && !hasSupport(pos)) return 0;
 
@@ -2069,13 +2068,13 @@ public class MaceSmash extends Module {
 
     private boolean hasSupport(BlockPos pos) {
         for (Direction d : Direction.values()) {
-            BlockState s = mc.world.getBlockState(webScanPos.set(pos, d));
+            BlockState s = mc.level.getBlockState(webScanPos.setWithOffset(pos, d));
             if (!s.isAir() && s.getFluidState().isEmpty()) return true;
         }
         return false;
     }
 
-    private double webFloorY(Box victim) {
+    private double webFloorY(AABB victim) {
         double res = Double.NEGATIVE_INFINITY;
         int yLo = (int) Math.floor(victim.minY) - 3, yHi = (int) Math.floor(victim.maxY) + 1;
         double x1 = mc.player.getX(), z1 = mc.player.getZ();
@@ -2085,7 +2084,7 @@ public class MaceSmash extends Module {
                 for (int cy = yHi; cy >= yLo; cy--) {
                     double need = cy + 1 + 0.05;
                     if (need <= res) break;
-                    if (mc.world.getBlockState(webScanPos.set(cx, cy, cz)).isOf(Blocks.COBWEB)) { res = need; break; }
+                    if (mc.level.getBlockState(webScanPos.set(cx, cy, cz)).is(Blocks.COBWEB)) { res = need; break; }
                 }
             }
         }
@@ -2114,7 +2113,7 @@ public class MaceSmash extends Module {
                 if (!haveMace()) { if (offset < 0) goHome("no mace"); else report("no mace in hotbar"); return; }
                 if (!charged()) { report("charging"); return; }
 
-                if (!mc.player.isGliding()) {
+                if (!mc.player.isFallFlying()) {
 
                     Plan p = plan(target, 0);
                     if (p != null && mc.player.fallDistance > 1.5 && p.botOff <= 0 && 0 <= p.topOff) { strikeNow = true; status = "falling strike"; }
@@ -2131,7 +2130,7 @@ public class MaceSmash extends Module {
                 descend(p);
             }
             case Descend -> {
-                if (target == null || !target.isAlive() || (target instanceof LivingEntity le && le.isDead())) { abort(); return; }
+                if (target == null || !target.isAlive() || (target instanceof LivingEntity le && le.isDeadOrDying())) { abort(); return; }
                 Plan p = plan(target, cycleTop);
                 if (p == null) { abort(); return; }
                 strikeOffset = p.strikeOff;
@@ -2183,7 +2182,7 @@ public class MaceSmash extends Module {
     private void hoverPost() {
         if (phase != Phase.Idle && !posSentThisTick) sendPos(offset);
         if (strikeNow) { hoverStrike(); strikeNow = false; }
-        if (carryMode() && phase == Phase.Descend && mc.player.isGliding() && !serverOff) {
+        if (carryMode() && phase == Phase.Descend && mc.player.isFallFlying() && !serverOff) {
             unglide();
             serverOff = true;
         }
@@ -2200,7 +2199,7 @@ public class MaceSmash extends Module {
 
     private void hoverStrike() {
         if (target == null) return;
-        boolean gliding = mc.player.isGliding();
+        boolean gliding = mc.player.isFallFlying();
         boolean carry = carryMode();
 
         if (gliding && !carry) unglide();

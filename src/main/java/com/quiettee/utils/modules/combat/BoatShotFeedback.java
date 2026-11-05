@@ -1,16 +1,15 @@
 package com.quiettee.utils.modules.combat;
 
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.damage.DamageTypes;
-import net.minecraft.network.packet.Packet;
-import net.minecraft.network.packet.s2c.play.EntityDamageS2CPacket;
-import net.minecraft.network.packet.s2c.play.EntityStatusS2CPacket;
-
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundDamageEventPacket;
+import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
+import net.minecraft.world.damagesource.DamageTypes;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 
 public final class BoatShotFeedback {
     private final ConcurrentLinkedQueue<Packet<?>> incoming = new ConcurrentLinkedQueue<>();
@@ -27,7 +26,7 @@ public final class BoatShotFeedback {
         boolean overlapping, totem;
     }
     public void offer(Packet<?> packet) {
-        if (!(packet instanceof EntityDamageS2CPacket || packet instanceof EntityStatusS2CPacket)) return;
+        if (!(packet instanceof ClientboundDamageEventPacket || packet instanceof ClientboundEntityEventPacket)) return;
         if (incoming.size() >= 256) incoming.poll();
         incoming.offer(packet);
     }
@@ -37,16 +36,16 @@ public final class BoatShotFeedback {
         for (long key : seen.keySet()) if ((int)(key >> 32) == arrow) return true;
         return false;
     }
-    public void tick(ClientWorld world, int player, int tick, Consumer<String> report, Consumer<String> log) {
+    public void tick(ClientLevel world, int player, int tick, Consumer<String> report, Consumer<String> log) {
         Packet<?> packet;
         while ((packet = incoming.poll()) != null) {
-            if (packet instanceof EntityDamageS2CPacket damage) {
+            if (packet instanceof ClientboundDamageEventPacket damage) {
                 int victim = damage.entityId();
-                boolean ours = damage.sourceCauseId() == player && damage.sourceType().matchesKey(DamageTypes.ARROW);
+                boolean ours = damage.sourceCauseId() == player && damage.sourceType().is(DamageTypes.ARROW);
                 if (ours) {
                     long key = ((long) damage.sourceDirectId() << 32) ^ (victim & 0xffffffffL);
                     if (seen.putIfAbsent(key, tick + 200) != null) continue;
-                    Entity entity = world.getEntityById(victim);
+                    Entity entity = world.getEntity(victim);
                     Hit hit = new Hit();
                     hit.victim = victim; hit.arrow = damage.sourceDirectId(); hit.due = tick + 6;
                     hit.name = entity == null ? "entity #" + victim : entity.getName().getString();
@@ -62,7 +61,7 @@ public final class BoatShotFeedback {
                     otherDamage.put(victim, tick);
                     for (Hit hit : pending) if (hit.victim == victim) hit.overlapping = true;
                 }
-            } else if (packet instanceof EntityStatusS2CPacket status && status.getStatus() == 35) {
+            } else if (packet instanceof ClientboundEntityEventPacket status && status.getEventId() == 35) {
                 Entity entity = status.getEntity(world);
                 if (entity != null) {
                     recentTotem.put(entity.getId(),tick);
@@ -73,7 +72,7 @@ public final class BoatShotFeedback {
         for (Iterator<Hit> iterator = pending.iterator(); iterator.hasNext();) {
             Hit hit = iterator.next();
             if (tick < hit.due) continue;
-            Entity entity = world.getEntityById(hit.victim);
+            Entity entity = world.getEntity(hit.victim);
             float after = entity instanceof LivingEntity living ? living.getHealth() : Float.NaN;
             float absorptionAfter = entity instanceof LivingEntity living ? living.getAbsorptionAmount() : Float.NaN;
             double drop = hit.before - after;
@@ -93,7 +92,7 @@ public final class BoatShotFeedback {
         otherDamage.entrySet().removeIf(e -> tick - e.getValue() > 10);
         recentTotem.entrySet().removeIf(e -> tick-e.getValue()>10);
         health.clear(); absorption.clear();
-        for (Entity entity : world.getEntities()) if (entity instanceof LivingEntity living) {
+        for (Entity entity : world.entitiesForRendering()) if (entity instanceof LivingEntity living) {
             health.put(entity.getId(), living.getHealth()); absorption.put(entity.getId(),living.getAbsorptionAmount());
         }
     }

@@ -17,22 +17,21 @@ import meteordevelopment.meteorclient.systems.modules.movement.elytrafly.ElytraF
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.orbit.EventPriority;
-import net.minecraft.component.DataComponentTypes;
-import net.minecraft.entity.EquipmentSlot;
-import net.minecraft.entity.MovementType;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
-import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket;
-import net.minecraft.network.packet.c2s.play.CloseHandledScreenC2SPacket;
-import net.minecraft.network.packet.c2s.play.PlayerMoveC2SPacket;
-import net.minecraft.network.packet.s2c.common.DisconnectS2CPacket;
-import net.minecraft.network.packet.s2c.play.ChunkRenderDistanceCenterS2CPacket;
-import net.minecraft.network.packet.s2c.play.PlayerPositionLookS2CPacket;
-import net.minecraft.network.packet.s2c.play.PositionFlag;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
-
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.protocol.common.ClientboundDisconnectPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
+import net.minecraft.network.protocol.game.ClientboundSetChunkCacheCenterPacket;
+import net.minecraft.network.protocol.game.ServerboundContainerClosePacket;
+import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
+import net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket;
+import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.MoverType;
+import net.minecraft.world.entity.Relative;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.Vec3;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -280,7 +279,7 @@ public class FloatModule extends Module {
         .build()
     );
 
-    private Vec3d anchor;
+    private Vec3 anchor;
     private long startedAt;
     private int ticks;
     private int movingTicks;
@@ -315,7 +314,7 @@ public class FloatModule extends Module {
 
     @Override
     public void onActivate() {
-        anchor = mc.player.getEntityPos();
+        anchor = mc.player.position();
         startedAt = java.lang.System.currentTimeMillis();
         ticks = 0;
         movingTicks = 0;
@@ -345,13 +344,13 @@ public class FloatModule extends Module {
         if (standDown.get()) standDownOthers();
         if (armor.get() == Armor.Chestplate) equipChestplate();
 
-        mc.player.setVelocity(0, 0, 0);
+        mc.player.setDeltaMovement(0, 0, 0);
         mc.player.fallDistance = 0;
 
         say("pinned at %.1f / %.1f / %.1f%s", anchor.x, anchor.y, anchor.z,
             probe.get() ? " - PROBE ladder armed, hold a movement key" : "");
         dbg("ACTIVATE anchor %.3f/%.3f/%.3f gliding=%b onGroundClient=%b creep=%.3f",
-            anchor.x, anchor.y, anchor.z, mc.player.isGliding(), mc.player.isOnGround(), activeCreep);
+            anchor.x, anchor.y, anchor.z, mc.player.isFallFlying(), mc.player.onGround(), activeCreep);
     }
 
     @Override
@@ -377,35 +376,35 @@ public class FloatModule extends Module {
     }
 
     private void release() {
-        if (mc.player == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.getConnection() == null) return;
 
-        boolean airborne = !mc.player.isOnGround();
+        boolean airborne = !mc.player.onGround();
 
-        mc.getNetworkHandler().sendPacket(new PlayerMoveC2SPacket.Full(
+        mc.getConnection().send(new ServerboundMovePlayerPacket.PosRot(
             mc.player.getX(), mc.player.getY(), mc.player.getZ(),
-            mc.player.getYaw(), mc.player.getPitch(), false, mc.player.horizontalCollision));
+            mc.player.getYRot(), mc.player.getXRot(), false, mc.player.horizontalCollision));
 
         if (armor.get() == Armor.Chestplate && restoreElytra.get()) equipElytra();
 
         if (autoGlide.get() && airborne
-            && mc.player.getEquippedStack(EquipmentSlot.CHEST).contains(DataComponentTypes.GLIDER)
-            && !mc.player.isTouchingWater()) {
-            mc.getNetworkHandler().sendPacket(new ClientCommandC2SPacket(mc.player, ClientCommandC2SPacket.Mode.START_FALL_FLYING));
+            && mc.player.getItemBySlot(EquipmentSlot.CHEST).has(DataComponents.GLIDER)
+            && !mc.player.isInWater()) {
+            mc.getConnection().send(new ServerboundPlayerCommandPacket(mc.player, ServerboundPlayerCommandPacket.Action.START_FALL_FLYING));
             dbg("RELEASE wings opened");
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     private void onPlayerMove(PlayerMoveEvent event) {
-        if (mc.player == null || event.type != MovementType.SELF) return;
+        if (mc.player == null || event.type != MoverType.SELF) return;
 
-        Vec3d creep = creepVector();
+        Vec3 creep = creepVector();
         double vx = creep.x, vy = creep.y, vz = creep.z;
 
         if (snapBack.get() && anchor != null) {
 
-            if (creep.lengthSquared() < 1e-9) {
-                Vec3d back = anchor.subtract(mc.player.getEntityPos());
+            if (creep.lengthSqr() < 1e-9) {
+                Vec3 back = anchor.subtract(mc.player.position());
                 double d = back.length();
                 if (d > 1e-4) {
                     double stepCap = Math.max(0.05, creepSpeed.get());
@@ -416,31 +415,31 @@ public class FloatModule extends Module {
                 }
             }
             else {
-                anchor = mc.player.getEntityPos().add(vx, vy, vz);
+                anchor = mc.player.position().add(vx, vy, vz);
             }
         }
 
         ((IVec3d) event.movement).meteor$set(vx, vy, vz);
     }
 
-    private Vec3d creepVector() {
-        if (mc.player == null || mc.currentScreen != null) return Vec3d.ZERO;
+    private Vec3 creepVector() {
+        if (mc.player == null || mc.screen != null) return Vec3.ZERO;
 
         double speed = probe.get() ? activeCreep : creepSpeed.get();
 
         if (creepMode.get() == CreepMode.Stutter) {
             int cycle = creepBurst.get() + creepRest.get();
-            if (cycle > 0 && ticks % cycle >= creepBurst.get()) return Vec3d.ZERO;
+            if (cycle > 0 && ticks % cycle >= creepBurst.get()) return Vec3.ZERO;
         }
 
-        Vec3d fwd = Vec3d.fromPolar(0, mc.player.getYaw());
-        Vec3d rgt = Vec3d.fromPolar(0, mc.player.getYaw() + 90);
+        Vec3 fwd = Vec3.directionFromRotation(0, mc.player.getYRot());
+        Vec3 rgt = Vec3.directionFromRotation(0, mc.player.getYRot() + 90);
 
         double fx = 0, fz = 0;
-        if (mc.options.forwardKey.isPressed()) { fx += fwd.x; fz += fwd.z; }
-        if (mc.options.backKey.isPressed())    { fx -= fwd.x; fz -= fwd.z; }
-        if (mc.options.rightKey.isPressed())   { fx += rgt.x; fz += rgt.z; }
-        if (mc.options.leftKey.isPressed())    { fx -= rgt.x; fz -= rgt.z; }
+        if (mc.options.keyUp.isDown()) { fx += fwd.x; fz += fwd.z; }
+        if (mc.options.keyDown.isDown())    { fx -= fwd.x; fz -= fwd.z; }
+        if (mc.options.keyRight.isDown())   { fx += rgt.x; fz += rgt.z; }
+        if (mc.options.keyLeft.isDown())    { fx -= rgt.x; fz -= rgt.z; }
 
         double len = Math.sqrt(fx * fx + fz * fz);
         double vx = 0, vz = 0;
@@ -452,16 +451,16 @@ public class FloatModule extends Module {
         double vy = 0;
         double vs = creepVertical.get();
         if (vs > 0) {
-            if (mc.options.jumpKey.isPressed()) vy = vs;
-            else if (mc.options.sneakKey.isPressed()) vy = -vs;
+            if (mc.options.keyJump.isDown()) vy = vs;
+            else if (mc.options.keyShift.isDown()) vy = -vs;
         }
 
-        return new Vec3d(vx, vy, vz);
+        return new Vec3(vx, vy, vz);
     }
 
     @EventHandler
     private void onTickPre(TickEvent.Pre event) {
-        if (mc.player == null || mc.world == null || mc.getNetworkHandler() == null) return;
+        if (mc.player == null || mc.level == null || mc.getConnection() == null) return;
 
         ticks++;
 
@@ -470,11 +469,11 @@ public class FloatModule extends Module {
             return;
         }
 
-        mc.player.setVelocity(0, 0, 0);
+        mc.player.setDeltaMovement(0, 0, 0);
         mc.player.fallDistance = 0;
 
-        Vec3d creep = creepVector();
-        boolean moving = creep.lengthSquared() > 1e-9;
+        Vec3 creep = creepVector();
+        boolean moving = creep.lengthSqr() > 1e-9;
         if (moving) movingTicks++;
 
         if (probe.get() && !ladderDone && moving) {
@@ -487,14 +486,14 @@ public class FloatModule extends Module {
             }
         }
 
-        if (!announcedSurvival && ticks > 100 && !mc.player.isGliding() && corrections == 0) {
+        if (!announcedSurvival && ticks > 100 && !mc.player.isFallFlying() && corrections == 0) {
             announcedSurvival = true;
             say("4 seconds of un-glided hover with no kick - this server allows flight, the pin is doing the rest");
             dbg("SURVIVED the 80-tick vanilla floating window");
         }
 
         if (snapBack.get() && anchor != null && !moving) {
-            double drift = mc.player.getEntityPos().distanceTo(anchor);
+            double drift = mc.player.position().distanceTo(anchor);
             if (drift > 1.5) {
                 requestRelease(String.format("shoved %.1f blocks off the anchor", drift));
                 dbg("DRIFT %.2f blocks off anchor - releasing", drift);
@@ -510,7 +509,7 @@ public class FloatModule extends Module {
         if (cageCheckIn > 0 && --cageCheckIn == 0) checkCage();
 
         if (antiAfk.get() > 0 && ticks % (antiAfk.get() * 20) == 0) {
-            mc.player.setYaw(mc.player.getYaw() + (afkFlip ? 0.05f : -0.05f));
+            mc.player.setYRot(mc.player.getYRot() + (afkFlip ? 0.05f : -0.05f));
             afkFlip = !afkFlip;
             dbg("ANTIAFK yaw wiggle");
         }
@@ -525,24 +524,24 @@ public class FloatModule extends Module {
         lastHealth = hp;
 
         if (fileDebug.get() && ticks % 20 == 0) {
-            Vec3d p = mc.player.getEntityPos();
+            Vec3 p = mc.player.position();
             dbg("TICK pos=%.3f/%.3f/%.3f creep=%.3f moving=%b gliding=%b hp=%.1f",
-                p.x, p.y, p.z, creep.length(), moving, mc.player.isGliding(), hp);
+                p.x, p.y, p.z, creep.length(), moving, mc.player.isFallFlying(), hp);
         }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)
     private void onSend(PacketEvent.Send event) {
-        if (mc.player == null || !(event.packet instanceof PlayerMoveC2SPacket p)) return;
+        if (mc.player == null || !(event.packet instanceof ServerboundMovePlayerPacket p)) return;
 
-        boolean lookOnly = !p.changesPosition() && p.changesLook();
+        boolean lookOnly = !p.hasPosition() && p.hasRotation();
         if (lookOnly && lookInterval > 1 && ticks - lastLookTick < lookInterval
-            && !mc.options.attackKey.isPressed() && !mc.options.useKey.isPressed()) {
+            && !mc.options.keyAttack.isDown() && !mc.options.keyUse.isDown()) {
             lookSuppressed++;
             event.cancel();
             return;
         }
-        if (p.changesLook()) lastLookTick = ticks;
+        if (p.hasRotation()) lastLookTick = ticks;
 
         ((PlayerMoveC2SPacketAccessor) p).quiettee$setOnGround(true);
         if (claimCollision.get()) ((PlayerMoveC2SPacketAccessor) p).quiettee$setHorizontalCollision(true);
@@ -550,9 +549,9 @@ public class FloatModule extends Module {
 
         if (fileDebug.get()) {
             dbg("PKT %-9s pos=%s look=%s onGround=true%s",
-                p.changesPosition() ? (p.changesLook() ? "pos+look" : "pos") : (p.changesLook() ? "look" : "ground"),
-                p.changesPosition() ? String.format("%.3f/%.3f/%.3f", p.getX(0), p.getY(0), p.getZ(0)) : "-",
-                p.changesLook() ? String.format("%.1f/%.1f", (double) p.getYaw(0), (double) p.getPitch(0)) : "-",
+                p.hasPosition() ? (p.hasRotation() ? "pos+look" : "pos") : (p.hasRotation() ? "look" : "ground"),
+                p.hasPosition() ? String.format("%.3f/%.3f/%.3f", p.getX(0), p.getY(0), p.getZ(0)) : "-",
+                p.hasRotation() ? String.format("%.1f/%.1f", (double) p.getYRot(0), (double) p.getXRot(0)) : "-",
                 claimCollision.get() ? " collision=true" : "");
         }
     }
@@ -561,18 +560,18 @@ public class FloatModule extends Module {
     private void onReceive(PacketEvent.Receive event) {
         if (mc.player == null) return;
 
-        if (event.packet instanceof PlayerPositionLookS2CPacket p) {
+        if (event.packet instanceof ClientboundPlayerPositionPacket p) {
             corrections++;
 
-            Vec3d cur = mc.player.getEntityPos();
-            Set<PositionFlag> rel = p.relatives();
-            Vec3d raw = p.change().position();
-            double tx = rel.contains(PositionFlag.X) ? cur.x + raw.x : raw.x;
-            double ty = rel.contains(PositionFlag.Y) ? cur.y + raw.y : raw.y;
-            double tz = rel.contains(PositionFlag.Z) ? cur.z + raw.z : raw.z;
+            Vec3 cur = mc.player.position();
+            Set<Relative> rel = p.relatives();
+            Vec3 raw = p.change().position();
+            double tx = rel.contains(Relative.X) ? cur.x + raw.x : raw.x;
+            double ty = rel.contains(Relative.Y) ? cur.y + raw.y : raw.y;
+            double tz = rel.contains(Relative.Z) ? cur.z + raw.z : raw.z;
             double dist = Math.sqrt((tx - cur.x) * (tx - cur.x) + (ty - cur.y) * (ty - cur.y) + (tz - cur.z) * (tz - cur.z));
 
-            anchor = new Vec3d(tx, ty, tz);
+            anchor = new Vec3(tx, ty, tz);
 
             keepLook = true;
 
@@ -595,7 +594,7 @@ public class FloatModule extends Module {
             }
 
             dbg("CORRECTION #%d id=%d dist=%.3f %s -> %.3f/%.3f/%.3f (we were %.3f/%.3f/%.3f) creep=%.3f",
-                corrections, p.teleportId(), dist, material ? "MATERIAL" : "NO-OP",
+                corrections, p.id(), dist, material ? "MATERIAL" : "NO-OP",
                 tx, ty, tz, cur.x, cur.y, cur.z, activeCreep);
 
             if (probe.get() && !ladderDone && material) {
@@ -621,14 +620,14 @@ public class FloatModule extends Module {
             return;
         }
 
-        if (fileDebug.get() && event.packet instanceof ChunkRenderDistanceCenterS2CPacket p) {
-            double cx = p.getChunkX() * 16 + 8, cz = p.getChunkZ() * 16 + 8;
+        if (fileDebug.get() && event.packet instanceof ClientboundSetChunkCacheCenterPacket p) {
+            double cx = p.getX() * 16 + 8, cz = p.getZ() * 16 + 8;
             dbg("SRVPOS server thinks we are near %.0f/%.0f (%.1f blocks from us)",
                 cx, cz, Math.hypot(mc.player.getX() - cx, mc.player.getZ() - cz));
             return;
         }
 
-        if (event.packet instanceof DisconnectS2CPacket p) {
+        if (event.packet instanceof ClientboundDisconnectPacket p) {
             String reason = p.reason().getString();
             dbg("*** DISCONNECTED: %s", reason);
             if (reason.toLowerCase().contains("flying") || reason.toLowerCase().contains("flight")) {
@@ -638,12 +637,12 @@ public class FloatModule extends Module {
     }
 
     private void checkCage() {
-        if (mc.player == null || mc.world == null) return;
+        if (mc.player == null || mc.level == null) return;
 
-        BlockPos feet = mc.player.getBlockPos();
+        BlockPos feet = mc.player.blockPosition();
         int walls = 0;
-        for (BlockPos side : new BlockPos[]{feet.north(), feet.south(), feet.east(), feet.west(), feet.up(2), feet.down()}) {
-            if (!mc.world.getBlockState(side).isAir()) walls++;
+        for (BlockPos side : new BlockPos[]{feet.north(), feet.south(), feet.east(), feet.west(), feet.above(2), feet.below()}) {
+            if (!mc.level.getBlockState(side).isAir()) walls++;
         }
 
         if (walls >= 5) {
@@ -662,13 +661,13 @@ public class FloatModule extends Module {
     }
 
     private void equipChestplate() {
-        ItemStack worn = mc.player.getEquippedStack(EquipmentSlot.CHEST);
-        if (!worn.contains(DataComponentTypes.GLIDER)) return;
+        ItemStack worn = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        if (!worn.has(DataComponents.GLIDER)) return;
 
         int best = -1;
         boolean done = false;
-        for (int i = 0; i < mc.player.getInventory().getMainStacks().size() && !done; i++) {
-            Item item = mc.player.getInventory().getMainStacks().get(i).getItem();
+        for (int i = 0; i < mc.player.getInventory().getNonEquipmentItems().size() && !done; i++) {
+            Item item = mc.player.getInventory().getNonEquipmentItems().get(i).getItem();
             switch (chestplate.get()) {
                 case Diamond -> { if (item == Items.DIAMOND_CHESTPLATE) { best = i; done = true; } }
                 case Netherite -> { if (item == Items.NETHERITE_CHESTPLATE) { best = i; done = true; } }
@@ -690,17 +689,17 @@ public class FloatModule extends Module {
         }
 
         InvUtils.move().from(best).toArmor(ARMOR_SLOT_CHEST);
-        mc.getNetworkHandler().sendPacket(new CloseHandledScreenC2SPacket(0));
+        mc.getConnection().send(new ServerboundContainerClosePacket(0));
         dbg("KIT chestplate from slot %d", best);
     }
 
     private void equipElytra() {
-        if (mc.player.getEquippedStack(EquipmentSlot.CHEST).contains(DataComponentTypes.GLIDER)) return;
+        if (mc.player.getItemBySlot(EquipmentSlot.CHEST).has(DataComponents.GLIDER)) return;
 
-        for (int i = 0; i < mc.player.getInventory().getMainStacks().size(); i++) {
-            if (mc.player.getInventory().getMainStacks().get(i).contains(DataComponentTypes.GLIDER)) {
+        for (int i = 0; i < mc.player.getInventory().getNonEquipmentItems().size(); i++) {
+            if (mc.player.getInventory().getNonEquipmentItems().get(i).has(DataComponents.GLIDER)) {
                 InvUtils.move().from(i).toArmor(ARMOR_SLOT_CHEST);
-                mc.getNetworkHandler().sendPacket(new CloseHandledScreenC2SPacket(0));
+                mc.getConnection().send(new ServerboundContainerClosePacket(0));
                 dbg("KIT elytra restored from slot %d", i);
                 return;
             }
@@ -742,7 +741,7 @@ public class FloatModule extends Module {
         closeDebug();
         if (!fileDebug.get()) return;
         try {
-            File dir = new File(mc.runDirectory, "float");
+            File dir = new File(mc.gameDirectory, "float");
             dir.mkdirs();
             File f = new File(dir, "float-" + new SimpleDateFormat("yyyyMMdd-HHmmss").format(new Date()) + ".log");
             dbgOut = new PrintWriter(new BufferedWriter(new FileWriter(f, true)));

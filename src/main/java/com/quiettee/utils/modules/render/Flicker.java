@@ -5,10 +5,9 @@ import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.network.packet.c2s.common.ClientOptionsC2SPacket;
-import net.minecraft.network.packet.c2s.common.SyncedClientOptions;
-import net.minecraft.util.Arm;
-
+import net.minecraft.network.protocol.common.ServerboundClientInformationPacket;
+import net.minecraft.server.level.ClientInformation;
+import net.minecraft.world.entity.HumanoidArm;
 import java.util.Random;
 
 public class Flicker extends Module {
@@ -95,7 +94,7 @@ public class Flicker extends Module {
     private boolean rightArm = true;
     private int itemTimer;
     private int originalSlot = -1;
-    private SyncedClientOptions original;
+    private ClientInformation original;
 
     public Flicker() {
         super(QuietteeUtils.CATEGORY, "flicker", "Animate your skin on other players' screens.");
@@ -106,8 +105,8 @@ public class Flicker extends Module {
         timer = 0;
         handTimer = 0;
         step = 0;
-        original = mc.options.getSyncedOptions();
-        rightArm = original.mainArm() == Arm.RIGHT;
+        original = mc.options.buildPlayerInformation();
+        rightArm = original.mainHand() == HumanoidArm.RIGHT;
         itemTimer = 0;
         originalSlot = mc.player == null ? -1 : mc.player.getInventory().getSelectedSlot();
     }
@@ -115,8 +114,8 @@ public class Flicker extends Module {
     @Override
     public void onDeactivate() {
 
-        if (original != null && mc.getNetworkHandler() != null) {
-            mc.getNetworkHandler().sendPacket(new ClientOptionsC2SPacket(original));
+        if (original != null && mc.getConnection() != null) {
+            mc.getConnection().send(new ServerboundClientInformationPacket(original));
         }
         original = null;
 
@@ -126,7 +125,7 @@ public class Flicker extends Module {
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        if (mc.player == null || mc.getNetworkHandler() == null || original == null) return;
+        if (mc.player == null || mc.getConnection() == null || original == null) return;
 
         boolean dirty = false;
 
@@ -142,7 +141,7 @@ public class Flicker extends Module {
             dirty = true;
         }
 
-        if (dirty) send(mask(), rightArm ? Arm.RIGHT : Arm.LEFT);
+        if (dirty) send(mask(), rightArm ? HumanoidArm.RIGHT : HumanoidArm.LEFT);
 
         if (itemStrobe.get() && --itemTimer <= 0) {
             itemTimer = itemRate.get();
@@ -176,16 +175,16 @@ public class Flicker extends Module {
         return m | locked;
     }
 
-    private void send(int parts, Arm arm) {
-        mc.getNetworkHandler().sendPacket(new ClientOptionsC2SPacket(new SyncedClientOptions(
+    private void send(int parts, HumanoidArm arm) {
+        mc.getConnection().send(new ServerboundClientInformationPacket(new ClientInformation(
             original.language(),
             original.viewDistance(),
             original.chatVisibility(),
-            original.chatColorsEnabled(),
+            original.chatColors(),
             parts,
             arm,
-            original.filtersText(),
-            original.allowsServerListing(),
+            original.textFilteringEnabled(),
+            original.allowsListing(),
             original.particleStatus()
         )));
     }
