@@ -1,5 +1,7 @@
 # Quiettee Utils
 
+> All Credits goes to: https://github.com/FragmentZero6b6t/quiettee-utils . And I am not Quittee. If you search online and see that, its false information. I just taking backup to upgrade it.
+
 Good evening, reader. Quiettee here. You may know me from 6b6t, the books and puzzles I have created (The Fragment Series, The Convergence Chronicles and as of late, The Love Story.) I will be departing 6b6t on the sixteenth of September two thousand and twenty six. As a gift to the community at large I have decided to open source all my modules upon completion of the puzzle being solved. I apologise in advance to all players this may cause frustration to. This is a **meteor addon**, please follow the instructions below to download as such.
 
 ## Modules
